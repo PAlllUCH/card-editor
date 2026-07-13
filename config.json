@@ -1,13 +1,13 @@
 {
     "kie_api_key": "21ff0a99c46483071f1d6d178ae27739",
-    "last_csv_path": "E:/Plansz\u00f3wki/Arkham/test4/downloaded_cards/ThePathtoCarcosa.244a8e/cards_data.csv",
+    "last_csv_path": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/NightOfTheZealot/cards_data.csv",
     "last_model": "nano-banana-2-2k (4 credits / ~$0.02 USD)",
     "upscale_factor": "2",
-    "output_dir": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/ThePathtoCarcosa.244a8e/upscaled",
+    "output_dir": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/NightOfTheZealot\\upscaled",
     "last_engine": "Local Upscayl",
     "kie_extra_params": "{}",
     "custom_prompt": "upscale and clean the image. make sure that all texts remain the same",
     "upscayl_bin_path": "C:/Program Files/Upscayl/resources/bin/upscayl-bin.exe",
     "local_model": "digital-art-4x",
-    "local_factor": "2"
+    "local_factor": "4"
 }

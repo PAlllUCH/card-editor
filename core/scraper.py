@@ -35,6 +35,21 @@ def get_extension(url):
     if ext in ['.png', '.jpg', '.jpeg', '.webp', '.bmp']: return ext
     return '.png'
 
+def format_arkhamdb_id(val):
+    """
+    Safely pads only the leading numeric portion of an ArkhamDB ID to 5 digits,
+    preserving alphanumeric suffixes (e.g., '3240' -> '03240', '3279a' -> '03279a').
+    """
+    val = str(val).strip()
+    if not val:
+        return ""
+    
+    match = re.match(r'^(\d+)(.*)$', val)
+    if match:
+        digits, suffix = match.groups()
+        return digits.zfill(5) + suffix
+    return val
+
 # --- Scraping Logic ---
 def download_image(url, filename, callbacks, pause_event, max_retries=3):
     if not url: return False
@@ -55,10 +70,10 @@ def download_image(url, filename, callbacks, pause_event, max_retries=3):
             
         except Exception as e:
             if attempt < max_retries:
-                callbacks['log'](f"[ WARNING ] Attempt {attempt}/{max_retries} failed for {url}. Retrying...")
+                callbacks['log'](f"[ WARNING ] Attempt {attempt}/{max_retries} failed. Retrying... \n -> Resource: {url}")
                 time.sleep(2)
             else:
-                callbacks['log'](f"[ ERROR ] Failed to download {url}.\nReason: {e}")
+                callbacks['log'](f"[ ERROR ] Failed to download: {os.path.basename(filename)}\n -> Link: {url}\n -> Reason: {e}")
                 callbacks['log']("--- AUTO-PAUSED DUE TO ERROR ---")
                 callbacks['trigger_pause']()
                 return False
@@ -70,14 +85,12 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
         callbacks['log'](f"Error: {e}"); callbacks['finish'](None, [])
         return
 
-    # FIXED: Using output_dir directly, skipping automatic sub-folder generation
     output_path = output_dir
     os.makedirs(output_path, exist_ok=True)
     callbacks['log'](f"Saving files directly to: {output_path}")
 
     csv_filename = os.path.join(output_path, "cards_data.csv")
     
-    # Read existing tracking columns if retrying
     existing_records = {}
     if is_retry and os.path.exists(csv_filename):
         callbacks['log']("Reading existing CSV tracker data to optimize downloads...")
@@ -86,8 +99,8 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                 reader = csv.reader(csv_file)
                 headers = next(reader)
                 for row in reader:
-                    if len(row) >= 8:
-                        existing_records[str(row[1])] = row  # Keyed by CardID string
+                    if len(row) >= 9: # Updated for added field columns length index validation
+                        existing_records[str(row[2])] = row # Tracked via CardID
         except Exception as e:
             callbacks['log'](f"[ WARNING ] Could not parse existing CSV: {e}")
 
@@ -112,7 +125,8 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
     
     with open(csv_filename, mode='w', newline='', encoding='utf-8') as csv_file:
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(['ArkhamDB', 'ID', 'front name', 'back name', 'count', 'front_downloaded', 'back_downloaded', 'count_registered'])
+        # Added 'card_name' immediately after 'ArkhamDB'
+        csv_writer.writerow(['ArkhamDB', 'card_name', 'ID', 'front name', 'back name', 'count', 'front_downloaded', 'back_downloaded', 'count_registered'])
 
         for file_info in json_files:
             pause_event.wait()
@@ -145,18 +159,20 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                         f_success = True if not f_name else False
                         b_success = True if not b_name else False
                         
+                        card_name_val = ""
                         count_val = "1"
                         count_reg_val = "No"
                         
                         if str_id in existing_records:
-                            count_val = existing_records[str_id][4]
-                            count_reg_val = existing_records[str_id][7]
+                            card_name_val = existing_records[str_id][1]
+                            count_val = existing_records[str_id][5]
+                            count_reg_val = existing_records[str_id][8]
 
                         # Process Front Face
                         if f_name:
                             expected_images.append(f_name)
                             f_path = os.path.join(output_path, f_name)
-                            is_already_done = str_id in existing_records and existing_records[str_id][5] == "Yes"
+                            is_already_done = str_id in existing_records and existing_records[str_id][6] == "Yes"
                             
                             if is_already_done and os.path.exists(f_path) and os.path.getsize(f_path) > 0:
                                 callbacks['log'](f" -> Skip: {f_name} already registered as downloaded.")
@@ -171,7 +187,7 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                         if b_name:
                             expected_images.append(b_name)
                             b_path = os.path.join(output_path, b_name)
-                            is_already_done = str_id in existing_records and existing_records[str_id][6] == "Yes"
+                            is_already_done = str_id in existing_records and existing_records[str_id][7] == "Yes"
                             
                             if is_already_done and os.path.exists(b_path) and os.path.getsize(b_path) > 0:
                                 callbacks['log'](f" -> Skip: {b_name} already registered as downloaded.")
@@ -198,10 +214,12 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                             elif isinstance(gm_notes, dict):
                                 arkham_db_val = str(gm_notes.get("id", ""))
 
+                        arkham_db_val = format_arkhamdb_id(arkham_db_val)
+
                         f_status = "Yes" if f_success else ("No" if f_name else "N/A")
                         b_status = "Yes" if b_success else ("No" if b_name else "N/A")
 
-                        csv_writer.writerow([arkham_db_val, card_id, f_name, b_name, count_val, f_status, b_status, count_reg_val])
+                        csv_writer.writerow([arkham_db_val, card_name_val, card_id, f_name, b_name, count_val, f_status, b_status, count_reg_val])
                         callbacks['log'](f"Logged ID {card_id} to CSV.")
                         
                         if (not f_name or f_success) and (not b_name or b_success):
@@ -241,9 +259,16 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
         log_callback(f"[ ERROR ] Failed to read CSV: {e}")
         return False
 
+    # Check for core structures
     if 'ArkhamDB' not in headers or 'count' not in headers:
         log_callback("[ ERROR ] CSV missing 'ArkhamDB' or 'count' columns.")
         return False
+
+    # Dynamic schema migration for older files structure variations
+    if 'card_name' not in headers:
+        headers.insert(1, 'card_name')
+        for row in rows:
+            row.insert(1, "")
 
     if 'count_registered' not in headers:
         headers.append('count_registered')
@@ -251,6 +276,7 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
             row.append('No')
             
     adb_idx = headers.index('ArkhamDB')
+    name_idx = headers.index('card_name')
     count_idx = headers.index('count')
     reg_idx = headers.index('count_registered')
     
@@ -264,16 +290,19 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
         if len(row) <= max(adb_idx, count_idx):
             continue
             
-        card_code = row[adb_idx].strip()
-        if not card_code:
+        raw_card_code = row[adb_idx].strip()
+        if not raw_card_code:
             continue
+            
+        card_code = format_arkhamdb_id(raw_card_code)
+        row[adb_idx] = card_code 
             
         if reg_idx < len(row) and row[reg_idx] == "Yes":
             log_callback(f"ArkhamDB ID: {card_code} already updated previously. Skipping.")
             continue
             
+        url = f"https://arkhamdb.com/api/public/card/{card_code}"
         try:
-            url = f"https://arkhamdb.com/api/public/card/{card_code}"
             headers_req = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             resp = requests.get(url, headers=headers_req, timeout=10)
             
@@ -282,6 +311,8 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
                 card_name = card_data.get('name', 'Unknown')
                 qty = card_data.get('quantity', 1)
                 
+                # Fetch and map metadata directly into row columns
+                row[name_idx] = str(card_name)
                 row[count_idx] = str(qty)
                 row[reg_idx] = "Yes"
                 
@@ -290,15 +321,15 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
                 updated_count += 1
             else:
                 log_callback(f"Fetching ArkhamDB ID: {card_code}...")
-                log_callback(f" -> [ WARNING ] Failed to fetch (Status: {resp.status_code})")
+                log_callback(f" -> [ WARNING ] Failed to fetch (Status: {resp.status_code})\n -> Inspector Link: {url}")
                 row[reg_idx] = "Failed"
-                failed_cards.append((card_code, "Unknown (HTTP Error)"))
+                failed_cards.append((card_code, f"HTTP Error {resp.status_code}", url))
                 
         except Exception as e:
             log_callback(f"Fetching ArkhamDB ID: {card_code}...")
-            log_callback(f" -> [ WARNING ] Error fetching: {e}")
+            log_callback(f" -> [ WARNING ] Error fetching: {e}\n -> Inspector Link: {url}")
             row[reg_idx] = "Failed"
-            failed_cards.append((card_code, f"Unknown ({type(e).__name__})"))
+            failed_cards.append((card_code, f"Exception ({type(e).__name__})", url))
             
         try:
             with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
@@ -313,6 +344,6 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
     log_callback(f"\nSuccessfully processed updates. {updated_count} new updates added.")
     if failed_cards:
         log_callback("\n[ WARNING ] The following cards could not be updated:")
-        for code, name in failed_cards:
-            log_callback(f"  - ID: {code} (Name: {name})")
+        for code, status, failed_url in failed_cards:
+            log_callback(f"  - ID: {code} (Status: {status})\n    Link: {failed_url}")
     return True

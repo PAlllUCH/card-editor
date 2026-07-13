@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
 import threading
 import os
+import csv
 from core.scraper import run_scraping_task, update_csv_quantities
 from core.config import OUTPUT_DIR
 
@@ -26,12 +27,10 @@ class ScraperTab:
         input_frame = ttk.Frame(left_frame, padding="10")
         input_frame.pack(fill=tk.X)
 
-        # GitHub URL Section
         ttk.Label(input_frame, text="GitHub Folder URL:").pack(anchor=tk.W, pady=2)
         self.url_entry = ttk.Entry(input_frame, width=80)
         self.url_entry.pack(fill=tk.X, pady=5)
 
-        # Dynamic Output Directory Selector UI element (Updated label text)
         ttk.Label(input_frame, text="Output Folder:").pack(anchor=tk.W, pady=2)
         dir_selection_frame = ttk.Frame(input_frame)
         dir_selection_frame.pack(fill=tk.X, pady=5)
@@ -41,7 +40,10 @@ class ScraperTab:
         self.dir_entry.insert(0, OUTPUT_DIR)
         
         self.browse_btn = ttk.Button(dir_selection_frame, text="Browse...", command=self.browse_output_directory)
-        self.browse_btn.pack(side=tk.RIGHT)
+        self.browse_btn.pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.check_csv_btn = ttk.Button(dir_selection_frame, text="Check CSV", command=self.check_existing_csv)
+        self.check_csv_btn.pack(side=tk.LEFT)
 
         self.verify_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(input_frame, text="Verify Files After Downloading", variable=self.verify_var).pack(anchor=tk.W, pady=5)
@@ -93,11 +95,56 @@ class ScraperTab:
         if chosen_dir:
             self.dir_entry.delete(0, tk.END)
             self.dir_entry.insert(0, os.path.abspath(chosen_dir))
+            self.check_existing_csv()
+
+    def check_existing_csv(self):
+        target_path = self.dir_entry.get().strip()
+        if not target_path or not os.path.exists(target_path):
+            messagebox.showwarning("Folder Error", "The specified directory path does not exist.")
+            return
+
+        csv_path = os.path.join(target_path, "cards_data.csv")
+        if not os.path.exists(csv_path):
+            self.log(f"[ INFO ] No 'cards_data.csv' found inside: {target_path}. Ready for a fresh scrape.")
+            return
+
+        self.log(f"\n[ INFO ] Found existing 'cards_data.csv' in folder. Parsing files...")
+        
+        expected_images = []
+        try:
+            with open(csv_path, mode='r', newline='', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                headers = next(reader)
+                
+                # Dynamically calculate indexes since card_name shifts them by 1
+                f_idx = headers.index('front name') if 'front name' in headers else 3
+                b_idx = headers.index('back name') if 'back name' in headers else 4
+                
+                for row in reader:
+                    if len(row) > max(f_idx, b_idx):
+                        front_file = row[f_idx].strip()
+                        back_file = row[b_idx].strip()
+                        if front_file and front_file != "N/A":
+                            expected_images.append(front_file)
+                        if back_file and back_file != "N/A":
+                            expected_images.append(back_file)
+
+            self.app.current_folder = target_path
+            self.app.expected_images = expected_images
+            
+            self._set_gui_stopped_state()
+            self.log(f"[ SUCCESS ] Loaded existing project metadata containing {len(expected_images)} indexed card images.")
+            self.log("[ READY ] 'Retry Missing Files', 'Fetch ArkhamDB Counts', and 'Verify' are now unlocked.")
+            
+        except Exception as e:
+            self.log(f"[ ERROR ] Failed to parse data from target file format: {e}")
+            messagebox.showerror("Parsing Error", f"Failed to properly load local CSV tracking schema:\n{e}")
 
     # --- UI STATE MANAGEMENT ---
     def _set_gui_running_state(self):
         self.run_btn.config(state=tk.DISABLED)
         self.browse_btn.config(state=tk.DISABLED)
+        self.check_csv_btn.config(state=tk.DISABLED)
         self.retry_btn.config(state=tk.DISABLED)
         self.fetch_counts_btn.config(state=tk.DISABLED)
         self.verify_btn.config(state=tk.DISABLED)
@@ -107,6 +154,7 @@ class ScraperTab:
     def _set_gui_paused_state(self):
         self.run_btn.config(state=tk.DISABLED)
         self.browse_btn.config(state=tk.DISABLED)
+        self.check_csv_btn.config(state=tk.DISABLED)
         self.retry_btn.config(state=tk.DISABLED)
         self.fetch_counts_btn.config(state=tk.DISABLED)
         self.verify_btn.config(state=tk.DISABLED)
@@ -116,6 +164,7 @@ class ScraperTab:
     def _set_gui_stopped_state(self):
         self.run_btn.config(state=tk.NORMAL)
         self.browse_btn.config(state=tk.NORMAL)
+        self.check_csv_btn.config(state=tk.NORMAL)
         self.retry_btn.config(state=tk.NORMAL)
         self.fetch_counts_btn.config(state=tk.NORMAL if self.app.current_folder else tk.DISABLED)
         self.verify_btn.config(state=tk.NORMAL)
@@ -140,7 +189,6 @@ class ScraperTab:
         self.console.see(tk.END)
         self.console.config(state=tk.DISABLED)
 
-    # --- THREADING & SCRAPING CALLS ---
     def init_file_list(self, files, is_retry):
         if not is_retry:
             self.tree.delete(*self.tree.get_children())
@@ -199,7 +247,7 @@ class ScraperTab:
 
     def verify_and_proceed(self):
         if not self.app.expected_images or not self.app.current_folder:
-            messagebox.showinfo("Info", "Nothing to verify. Start scraping first.")
+            messagebox.showinfo("Info", "Nothing to verify. Start scraping first or check an existing project folder.")
             return
             
         missing_files = [img for img in self.app.expected_images if not os.path.exists(os.path.join(self.app.current_folder, img))]
@@ -207,7 +255,7 @@ class ScraperTab:
         if missing_files:
             self.log(f"\n[ VERIFICATION FAILED ] {len(missing_files)} files are missing.")
             for mf in missing_files:
-                self.log(f" -> Missing: {mf}")
+                self.log(f" -> Missing local path target: {os.path.join(self.app.current_folder, mf)}")
             messagebox.showwarning("Missing Files", f"{len(missing_files)} expected images are missing.\nPlease click 'Retry Missing Files' to attempt downloading them again.")
         else:
             self.log("\n[ VERIFICATION SUCCESS ] All expected files found. Switching to Editor.")
@@ -215,7 +263,7 @@ class ScraperTab:
 
     def start_fetch_counts_thread(self):
         if not self.app.current_folder:
-            messagebox.showwarning("Warning", "No folder selected. Please scrape cards first or load them in the Editor.")
+            messagebox.showwarning("Warning", "No folder selected. Please scrape cards first or load them via 'Check CSV'.")
             return
 
         csv_path = os.path.join(self.app.current_folder, "cards_data.csv")

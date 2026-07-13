@@ -510,26 +510,87 @@ class UpscalingTab:
         local_factor = self.local_factor_var.get()
         
         def run():
+            import csv  # Imported inside the worker thread
             success_count = 0
             fail_count = 0
+            
+            # Dictionary to map original filename -> upscaled filename
+            upscaled_mapping = {} 
+
             for idx, filename in enumerate(files, 1):
                 filepath = os.path.join(base_folder, filename)
                 self.log(f"\n--- [{idx}/{len(files)}] Processing {filename} ---")
                 try:
                     if selected_engine == "KIE.ai":
-                        upscale_image_pipeline(
+                        out_path = upscale_image_pipeline(
                             file_path=filepath, model=model, api_key=api_key, output_dir=output_dir,
                             upscale_factor=factor, log_fn=self.log, extra_params=extra_params, custom_prompt=custom_prompt
                         )
                     else:
-                        upscale_image_local_upscayl(
+                        out_path = upscale_image_local_upscayl(
                             file_path=filepath, model=local_model, upscayl_bin=upscayl_bin,
                             output_dir=output_dir, upscale_factor=local_factor, log_fn=self.log
                         )
                     success_count += 1
+                    
+                    # Track what file was successfully saved out
+                    upscaled_mapping[filename] = os.path.basename(out_path)
+                    
                 except Exception as e:
                     self.log(f"[ERROR] Failed to upscale {filename}: {str(e)}")
                     fail_count += 1
+            
+            # ==================== NEW: RECREATE & UPDATE CSV FILE ====================
+            if success_count > 0:
+                self.log("\n--- Recreating tracking CSV inside output folder ---")
+                try:
+                    new_csv_path = os.path.join(output_dir, os.path.basename(csv_path))
+                    
+                    # Read the original CSV safely handling potential Excel BOM encoding quirks
+                    with open(csv_path, 'r', encoding='utf-8-sig', errors='replace', newline='') as infile:
+                        content = infile.read()
+                        infile.seek(0)
+                        
+                        # Robust delimiter auto-fallback check
+                        delimiter = ','
+                        if content.count(';') > content.count(','):
+                            delimiter = ';'
+                            
+                        reader = csv.reader(infile, delimiter=delimiter)
+                        rows = list(reader)
+                    
+                    # Traverse layout cells and swap outdated image names
+                    updated_rows = []
+                    for row in rows:
+                        new_row = []
+                        for cell in row:
+                            updated_cell = cell
+                            cell_clean = cell.strip().replace('\\', '/')
+                            
+                            for orig_name, new_name in upscaled_mapping.items():
+                                orig_clean = orig_name.replace('\\', '/')
+                                # Direct exact string match check
+                                if cell_clean == orig_clean:
+                                    updated_cell = new_name
+                                    break
+                                # Relative subdirectory match check (e.g. "images/card.jpg")
+                                elif cell_clean.endswith('/' + orig_clean):
+                                    prefix = cell[:-len(orig_name)]
+                                    updated_cell = prefix + new_name
+                                    break
+                            new_row.append(updated_cell)
+                        updated_rows.append(new_row)
+                    
+                    # Write out updated file clone into the designated upscaled directory
+                    with open(new_csv_path, 'w', encoding='utf-8', newline='') as outfile:
+                        writer = csv.writer(outfile, delimiter=delimiter)
+                        writer.writerows(updated_rows)
+                        
+                    self.log(f"[SUCCESS] Recreated updated configuration file: '{os.path.basename(new_csv_path)}'")
+                    
+                except Exception as csv_err:
+                    self.log(f"[ERROR] Failed to clone structural CSV: {str(csv_err)}")
+            # =========================================================================
                     
             self.log(f"\n======================================")
             self.log(f"Bulk processing finished!")
@@ -539,7 +600,7 @@ class UpscalingTab:
             
             self.app.root.after(0, lambda: messagebox.showinfo(
                 "Bulk Upscale Finished", 
-                f"Completed {len(files)} files.\nSuccess: {success_count}\nFailed: {fail_count}"
+                f"Completed {len(files)} files.\nSuccess: {success_count}\nFailed: {fail_count}\n\nCSV file updated in output directory!"
             ))
             self.app.root.after(0, lambda: self.set_buttons_state(tk.NORMAL))
             if selected_engine == "KIE.ai":

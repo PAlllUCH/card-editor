@@ -126,24 +126,22 @@ def create_upscale_task(model, image_url, api_key, upscale_factor="2", extra_par
         
     return task_id
 
-def poll_task_status(task_id, api_key, log_fn=None, poll_interval=5, timeout=300):
-    """Polls Kie.ai for the upscale task status.
-    Returns the result URL on success.
-    """
+def poll_task_status(task_id, api_key, log_fn=None, poll_interval=5, timeout=300, stop_check_fn=None):
+    """Polls Kie.ai for the upscale task status with support for immediate cancellation."""
     url = f"https://api.kie.ai/api/v1/jobs/recordInfo?taskId={task_id}"
-    headers = {
-        "Authorization": f"Bearer {api_key}"
-    }
-    
+    headers = {"Authorization": f"Bearer {api_key}"}
     start_time = time.time()
     
     while time.time() - start_time < timeout:
+        # NEW: Check for immediate UI cancellation signal
+        if stop_check_fn and stop_check_fn():
+            raise InterruptedError("Polling aborted by user request.")
+
         try:
             response = requests.get(url, headers=headers)
             response.raise_for_status()
             resp_json = response.json()
             
-            # The structure could have data wrap
             data = resp_json.get("data", {}) or resp_json
             state = data.get("state") or data.get("status") or resp_json.get("status")
             
@@ -151,7 +149,6 @@ def poll_task_status(task_id, api_key, log_fn=None, poll_interval=5, timeout=300
                 log_fn(f"Task status: {state}")
                 
             if state == "success":
-                # Extract results
                 result_json_str = data.get("resultJson")
                 result_urls = []
                 if result_json_str:
@@ -164,23 +161,19 @@ def poll_task_status(task_id, api_key, log_fn=None, poll_interval=5, timeout=300
                 
                 if not result_urls:
                     result_urls = data.get("resultUrls") or data.get("result") or data.get("output")
-                    
                 if not result_urls and "result" in resp_json:
                     result_urls = resp_json["result"]
-                    
                 if isinstance(result_urls, str):
                     result_urls = [result_urls]
                     
                 if result_urls and len(result_urls) > 0:
                     return result_urls[0]
                 else:
-                    raise ValueError(f"Task succeeded but no output URLs found in data. Response: {resp_json}")
+                    raise ValueError(f"Task succeeded but no output URLs found. Response: {resp_json}")
                     
             elif state in ("fail", "failed", "error"):
-                # Clean up error message retrieval to avoid generic "success" from HTTP wrapper
                 error_msg = data.get('failMsg') or data.get('error') or data.get('errorMessage') or data.get('message') or resp_json.get('error')
                 if not error_msg:
-                    # If we don't find a direct error field, check msg/message but ignore if it's "success"
                     for field in ('msg', 'message'):
                         val = data.get(field) or resp_json.get(field)
                         if val and val != "success":
@@ -190,15 +183,19 @@ def poll_task_status(task_id, api_key, log_fn=None, poll_interval=5, timeout=300
                     error_msg = "Unknown error details"
                 
                 fail_code_str = f" (Code: {data.get('failCode')})" if data.get('failCode') else ""
-                raise ValueError(f"Upscale task failed: {error_msg}{fail_code_str}. Full response: {json.dumps(resp_json)}")
+                raise ValueError(f"Upscale task failed: {error_msg}{fail_code_str}.")
                 
         except Exception as e:
             if log_fn:
                 log_fn(f"Error while polling: {str(e)}")
-            if "failed" in str(e).lower() or "fail" in str(e).lower():
+            if "failed" in str(e).lower() or "fail" in str(e).lower() or "aborted" in str(e).lower():
                 raise e
                 
-        time.sleep(poll_interval)
+        # Split sleep interval to stay responsive to stop signals during delay
+        for _ in range(poll_interval * 2):
+            if stop_check_fn and stop_check_fn():
+                raise InterruptedError("Polling aborted by user request.")
+            time.sleep(0.5)
         
     raise TimeoutError("Task timed out before completion.")
 
@@ -211,50 +208,46 @@ def download_file(url, output_path):
         for chunk in response.iter_content(8192):
             f.write(chunk)
 
-def upscale_image_pipeline(file_path, model, api_key, output_dir, upscale_factor="2", log_fn=None, extra_params=None, custom_prompt=None):
-    """Full pipeline to upscale a single image using Kie.ai and save the output.
-    Returns the path of the saved file.
-    """
+def upscale_image_pipeline(file_path, model, api_key, output_dir, upscale_factor="2", log_fn=None, extra_params=None, custom_prompt=None, stop_check_fn=None):
+    """Full pipeline to upscale a single image using Kie.ai."""
+    if stop_check_fn and stop_check_fn():
+        raise InterruptedError("Pipeline cancelled before upload.")
+
     if log_fn:
         log_fn(f"Step 1: Uploading '{os.path.basename(file_path)}' to Kie.ai...")
     download_url = upload_to_kie(file_path, api_key)
     
+    if stop_check_fn and stop_check_fn():
+        raise InterruptedError("Pipeline cancelled after upload.")
+
     if log_fn:
         log_fn(f"Uploaded successfully. Temp URL: {download_url}")
         log_fn(f"Step 2: Submitting upscale task with model '{model}'...")
         
-    # PASS THE CUSTOM PROMPT HERE
     task_id = create_upscale_task(model, download_url, api_key, upscale_factor, extra_params, custom_prompt)
     
     if log_fn:
         log_fn(f"Task submitted successfully. Task ID: {task_id}")
         log_fn("Step 3: Polling for task completion...")
-    result_url = poll_task_status(task_id, api_key, log_fn)
+        
+    # Pass the stop checkpoint to the polling routine
+    result_url = poll_task_status(task_id, api_key, log_fn, stop_check_fn=stop_check_fn)
     
     if log_fn:
         log_fn(f"Result URL received: {result_url}")
         log_fn("Step 4: Downloading upscaled image...")
         
     base_name = os.path.splitext(os.path.basename(file_path))[0]
-    out_ext = os.path.splitext(os.path.basename(result_url))[1] or ".png"
-    output_path = os.path.join(output_dir, f"{base_name}_upscaled{out_ext}")
+    output_path = os.path.normpath(os.path.join(output_dir, f"{base_name}_upscaled.png"))
     
     download_file(result_url, output_path)
-    
-    if log_fn:
-        log_fn(f"Upscaling completed! Saved to '{output_path}'")
-        
     return output_path
 
-def upscale_image_local_upscayl(file_path, model, upscayl_bin, output_dir, upscale_factor="4", log_fn=None):
-    """Pipeline to upscale a single image locally using the Upscayl CLI binary.
-    Forces output to lossless PNG format for print optimization.
-    Returns the path of the saved file.
-    """
+def upscale_image_local_upscayl(file_path, model, upscayl_bin, output_dir, upscale_factor="4", log_fn=None, stop_check_fn=None):
+    """Pipeline to upscale a single image locally using the Upscayl CLI binary with active process kill logic."""
     if log_fn:
         log_fn(f"Starting local Upscayl processing for '{os.path.basename(file_path)}'...")
 
-    # Strict standard Windows path normalization
     upscayl_bin = os.path.normpath(upscayl_bin)
     file_path = os.path.normpath(file_path)
     output_dir = os.path.normpath(output_dir)
@@ -263,43 +256,30 @@ def upscale_image_local_upscayl(file_path, model, upscayl_bin, output_dir, upsca
         raise FileNotFoundError(f"Upscayl binary not found at specified path: {upscayl_bin}")
 
     os.makedirs(output_dir, exist_ok=True)
-
-    # FIXED: Hardcode the output extension to .png for printing requirements
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_path = os.path.normpath(os.path.join(output_dir, f"{base_name}_upscaled.png"))
 
-    # Extract the directory where the binary lives
     bin_dir = os.path.dirname(upscayl_bin)
-    
-    # Locate the default main installation models folder
     models_dir = os.path.abspath(os.path.join(bin_dir, "..", "models")).replace("\\", "/")
 
-    # ADDED: "-f", "png" explicitly instructs Upscayl to write a lossless file
-    cmd = [
-        upscayl_bin,
-        "-i", file_path,
-        "-o", output_path,
-        "-m", models_dir,
-        "-n", model,
-        "-s", str(upscale_factor),
-        "-f", "png"
-    ]
+    cmd = [upscayl_bin, "-i", file_path, "-o", output_path, "-m", models_dir, "-n", model, "-s", str(upscale_factor), "-f", "png"]
 
     if log_fn:
         log_fn(f"Running command: {' '.join([f'\"{x}\"' if ' ' in x else x for x in cmd])}")
 
-    # Fire process without a hidden execution shell environment
-    process = subprocess.Popen(
-        cmd, 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.STDOUT, 
-        text=True, 
-        shell=False,
-        cwd=bin_dir
-    )
+    if stop_check_fn and stop_check_fn():
+        raise InterruptedError("Upscayl processing stopped by user before launch.")
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=False, cwd=bin_dir)
     
     if process.stdout:
         for line in process.stdout:
+            # NEW: Actively kill the running executable if the user hits "Stop" mid-generation
+            if stop_check_fn and stop_check_fn():
+                process.terminate()
+                process.wait()
+                raise InterruptedError("Upscayl process terminated mid-execution by user command.")
+                
             if log_fn and line.strip():
                 log_fn(f"[Upscayl] {line.strip()}")
                 
