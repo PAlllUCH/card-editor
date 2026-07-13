@@ -72,8 +72,26 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
 
     folder_name = folder_path.split('/')[-1]
     output_path = os.path.join(output_dir, folder_name)
-    os.makedirs(output_path, exist_ok=True)
-    callbacks['log'](f"Saving images to: {output_path}")
+    
+    images_path = os.path.join(output_path, "images")
+    os.makedirs(images_path, exist_ok=True)
+    callbacks['log'](f"Saving images to: {images_path}")
+
+    csv_filename = os.path.join(output_path, "cards_data.csv")
+    
+    # SMART RETRY: Read existing tracking columns if retrying
+    existing_records = {}
+    if is_retry and os.path.exists(csv_filename):
+        callbacks['log']("Reading existing CSV tracker data to optimize downloads...")
+        try:
+            with open(csv_filename, mode='r', newline='', encoding='utf-8') as csv_file:
+                reader = csv.reader(csv_file)
+                headers = next(reader)
+                for row in reader:
+                    if len(row) >= 8:
+                        existing_records[str(row[1])] = row  # Keyed by CardID string
+        except Exception as e:
+            callbacks['log'](f"[ WARNING ] Could not parse existing CSV: {e}")
 
     api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{folder_path}?ref={branch}"
     callbacks['log']("Fetching file list from API...\n")
@@ -92,12 +110,11 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
     json_files = [f for f in files if f['name'].endswith('.json')]
     callbacks['init_file_list']([f['name'] for f in json_files], is_retry)
 
-    csv_filename = os.path.join(output_path, "cards_data.csv")
     expected_images = []
     
     with open(csv_filename, mode='w', newline='', encoding='utf-8') as csv_file:
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(['ArkhamDB', 'ID', 'front name', 'back name', 'count'])
+        csv_writer.writerow(['ArkhamDB', 'ID', 'front name', 'back name', 'count', 'front_downloaded', 'back_downloaded', 'count_registered'])
 
         for file_info in json_files:
             pause_event.wait()
@@ -120,28 +137,51 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                     back_url = find_key(data, "BackURL")
 
                     if card_id is not None:
+                        str_id = str(card_id)
                         f_ext = get_extension(str(face_url)) if face_url and isinstance(face_url, str) else ""
                         b_ext = get_extension(str(back_url)) if back_url and isinstance(back_url, str) else ""
 
                         f_name = f"{card_id}_front{f_ext}" if face_url else ""
                         b_name = f"{card_id}_back{b_ext}" if back_url else ""
 
-                        f_success = True
-                        b_success = True
+                        f_success = True if not f_name else False
+                        b_success = True if not b_name else False
+                        
+                        # Fallback registry state
+                        count_val = "1"
+                        count_reg_val = "No"
+                        
+                        if str_id in existing_records:
+                            count_val = existing_records[str_id][4]
+                            count_reg_val = existing_records[str_id][7]
 
+                        # Process Front Face
                         if f_name:
                             expected_images.append(f_name)
-                            f_path = os.path.join(output_path, f_name)
-                            if os.path.exists(f_path) and os.path.getsize(f_path) > 0:
-                                callbacks['log'](f" -> Already exists: {f_name}")
+                            f_path = os.path.join(images_path, f_name)
+                            is_already_done = str_id in existing_records and existing_records[str_id][5] == "Yes"
+                            
+                            if is_already_done and os.path.exists(f_path) and os.path.getsize(f_path) > 0:
+                                callbacks['log'](f" -> Skip: {f_name} already registered as downloaded.")
+                                f_success = True
+                            elif os.path.exists(f_path) and os.path.getsize(f_path) > 0:
+                                callbacks['log'](f" -> Already exists on disk: {f_name}")
+                                f_success = True
                             else:
                                 f_success = download_image(face_url, f_path, callbacks, pause_event)
 
+                        # Process Back Face
                         if b_name:
                             expected_images.append(b_name)
-                            b_path = os.path.join(output_path, b_name)
-                            if os.path.exists(b_path) and os.path.getsize(b_path) > 0:
-                                callbacks['log'](f" -> Already exists: {b_name}")
+                            b_path = os.path.join(images_path, b_name)
+                            is_already_done = str_id in existing_records and existing_records[str_id][6] == "Yes"
+                            
+                            if is_already_done and os.path.exists(b_path) and os.path.getsize(b_path) > 0:
+                                callbacks['log'](f" -> Skip: {b_name} already registered as downloaded.")
+                                b_success = True
+                            elif os.path.exists(b_path) and os.path.getsize(b_path) > 0:
+                                callbacks['log'](f" -> Already exists on disk: {b_name}")
+                                b_success = True
                             else:
                                 b_success = download_image(back_url, b_path, callbacks, pause_event)
 
@@ -161,11 +201,13 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                             elif isinstance(gm_notes, dict):
                                 arkham_db_val = str(gm_notes.get("id", ""))
 
-                        # UPDATED: Now writes ArkhamDB val and "1" for default count
-                        csv_writer.writerow([arkham_db_val, card_id, f_name, b_name, "1"])
+                        f_status = "Yes" if f_success else ("No" if f_name else "N/A")
+                        b_status = "Yes" if b_success else ("No" if b_name else "N/A")
+
+                        csv_writer.writerow([arkham_db_val, card_id, f_name, b_name, count_val, f_status, b_status, count_reg_val])
                         callbacks['log'](f"Logged ID {card_id} to CSV.")
                         
-                        if f_success and b_success:
+                        if (not f_name or f_success) and (not b_name or b_success):
                             callbacks['update_file_status'](fname, 'OK')
                         else:
                             callbacks['update_file_status'](fname, 'Error')
@@ -191,7 +233,6 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
     
     log_callback("Starting ArkhamDB quantity updates...\n")
     
-    # Read rows
     rows = []
     headers = []
     try:
@@ -206,9 +247,15 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
     if 'ArkhamDB' not in headers or 'count' not in headers:
         log_callback("[ ERROR ] CSV missing 'ArkhamDB' or 'count' columns.")
         return False
-        
+
+    if 'count_registered' not in headers:
+        headers.append('count_registered')
+        for row in rows:
+            row.append('No')
+            
     adb_idx = headers.index('ArkhamDB')
     count_idx = headers.index('count')
+    reg_idx = headers.index('count_registered')
     
     updated_count = 0
     failed_cards = []
@@ -224,42 +271,53 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
         if not card_code:
             continue
             
+        # SMART SKIP: Skip if already fetched successfully in a past attempt
+        if reg_idx < len(row) and row[reg_idx] == "Yes":
+            log_callback(f"ArkhamDB ID: {card_code} already updated previously. Skipping.")
+            continue
+            
         try:
             url = f"https://arkhamdb.com/api/public/card/{card_code}"
             headers_req = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             resp = requests.get(url, headers=headers_req, timeout=10)
+            
             if resp.status_code == 200:
                 card_data = resp.json()
                 card_name = card_data.get('name', 'Unknown')
                 qty = card_data.get('quantity', 1)
+                
                 row[count_idx] = str(qty)
+                row[reg_idx] = "Yes"
+                
                 log_callback(f"Fetching ArkhamDB ID: {card_code} ({card_name})...")
                 log_callback(f" -> Set count to {qty}")
                 updated_count += 1
             else:
                 log_callback(f"Fetching ArkhamDB ID: {card_code}...")
                 log_callback(f" -> [ WARNING ] Failed to fetch (Status: {resp.status_code})")
+                row[reg_idx] = "Failed"
                 failed_cards.append((card_code, "Unknown (HTTP Error)"))
+                
         except Exception as e:
             log_callback(f"Fetching ArkhamDB ID: {card_code}...")
             log_callback(f" -> [ WARNING ] Error fetching: {e}")
+            row[reg_idx] = "Failed"
             failed_cards.append((card_code, f"Unknown ({type(e).__name__})"))
             
+        # Live-saving incremental process
+        try:
+            with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+        except Exception as e:
+            log_callback(f"[ ERROR ] Live-writing progress to CSV failed: {e}")
+
         time.sleep(0.5)
         
-    # Write back
-    try:
-        with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(headers)
-            writer.writerows(rows)
-        log_callback(f"\nSuccessfully updated {updated_count} cards in CSV.")
-        
-        if failed_cards:
-            log_callback("\n[ WARNING ] The following cards could not be updated:")
-            for code, name in failed_cards:
-                log_callback(f"  - ID: {code} (Name: {name})")
-        return True
-    except Exception as e:
-        log_callback(f"[ ERROR ] Failed to write updated CSV: {e}")
-        return False
+    log_callback(f"\nSuccessfully processed updates. {updated_count} new updates added.")
+    if failed_cards:
+        log_callback("\n[ WARNING ] The following cards could not be updated:")
+        for code, name in failed_cards:
+            log_callback(f"  - ID: {code} (Name: {name})")
+    return True
