@@ -36,7 +36,7 @@ class EditorTab:
         
         ttk.Button(left_panel, text="Load Folder via CSV", command=self.load_from_csv).pack(fill=tk.X, pady=(0, 10))
         
-        # New Target Output Directory Selector
+        # Target Output Directory Selector
         out_group = ttk.LabelFrame(left_panel, text="Output Directory Setup", padding="5")
         out_group.pack(fill=tk.X, pady=(0, 10))
         self.out_folder_var = tk.StringVar()
@@ -232,29 +232,44 @@ class EditorTab:
         calc_lbl = tk.Label(size_group, textvariable=self.size_info_var, justify=tk.LEFT, bg="#333", fg="#0f0", font=("Consolas", 8))
         calc_lbl.pack(fill=tk.X, pady=(10, 0))
 
-        # --- ACTIONS / BAT FRAME ---
+        # ----------------------------------------------------
+        # BOTTOM CONTROLS ACTIONS PANEL
+        # ----------------------------------------------------
         actions = ttk.Frame(right_panel)
         actions.pack(fill=tk.X, pady=10)
 
-        ttk.Label(actions, text="Legacy Scale:").pack(side=tk.LEFT, padx=5)
-        self.upscale_var = tk.StringVar(value="1.0")
-        ttk.Combobox(actions, textvariable=self.upscale_var, values=["1.0", "1.5", "2.0"], width=5, state="readonly").pack(side=tk.LEFT, padx=5)
+        # Group 1: Consolidated Navigation & Preview Controls
+        nav_preview_group = ttk.LabelFrame(actions, text="Navigation & Preview Controls", padding="5")
+        nav_preview_group.pack(side=tk.LEFT, padx=(0, 10))
 
-        # Sequential Navigation Buttons
-        ttk.Button(actions, text="◀ Prev", command=lambda: self.navigate_queue(-1), width=6).pack(side=tk.LEFT, padx=(10, 2))
-        ttk.Button(actions, text="Next ▶", command=lambda: self.navigate_queue(1), width=6).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(nav_preview_group, text="◀ Prev", command=lambda: self.navigate_queue(-1), width=8).pack(side=tk.LEFT, padx=2)
+        self.toggle_check_btn = ttk.Button(nav_preview_group, text="Select/Deselect", command=self.toggle_current_file_check, width=15)
+        self.toggle_check_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav_preview_group, text="Next ▶", command=lambda: self.navigate_queue(1), width=8).pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav_preview_group, text="Preview Edit", command=self.preview_current_edit).pack(side=tk.LEFT, padx=(10, 2))
 
-        ttk.Button(actions, text="Preview Edit", command=self.preview_current_edit).pack(side=tk.LEFT, padx=5)
-        ttk.Button(actions, text="Save Current", command=self.save_current_edit).pack(side=tk.LEFT, padx=5)
-        ttk.Button(actions, text="Batch Apply to SELECTED", command=self.batch_apply_edits).pack(side=tk.LEFT, padx=5)
+        # Group 2: Deployment Management (To New Subfolder via Suffix renaming)
+        deploy_group = ttk.LabelFrame(actions, text="Deployment Management", padding="5")
+        deploy_group.pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(deploy_group, text="Save Current", command=self.save_current_edit).pack(side=tk.LEFT, padx=2)
+        ttk.Button(deploy_group, text="Batch Apply to SELECTED", command=self.batch_apply_edits).pack(side=tk.LEFT, padx=2)
         
-        bat_frame = ttk.Frame(right_panel)
-        bat_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(bat_frame, text="Post-process .bat file (Optional):").pack(side=tk.LEFT, padx=5)
-        self.bat_entry = ttk.Entry(bat_frame, width=30)
-        self.bat_entry.pack(side=tk.LEFT, padx=5)
-        ttk.Button(bat_frame, text="Browse", command=self.browse_bat).pack(side=tk.LEFT, padx=5)
-        ttk.Button(bat_frame, text="Run Bat Script", command=self.execute_bat).pack(side=tk.RIGHT, padx=5)
+        # Group 3: Overwrite Management (Modifies files directly in place, keeps CSV unchanged)
+        overwrite_group = ttk.LabelFrame(actions, text="Overwrite Management", padding="5")
+        overwrite_group.pack(side=tk.LEFT)
+
+        ttk.Button(overwrite_group, text="Overwrite Current", command=self.overwrite_current_in_place).pack(side=tk.LEFT, padx=2)
+        ttk.Button(overwrite_group, text="Batch Overwrite SELECTED", command=self.batch_overwrite_in_place).pack(side=tk.LEFT, padx=2)
+
+        # Group 4: Integrated Post-Processing BAT Automation Block
+        bat_group = ttk.LabelFrame(right_panel, text="Post-Process automation Script (.bat)", padding="5")
+        bat_group.pack(fill=tk.X, pady=5)
+        
+        self.bat_entry = ttk.Entry(bat_group, width=30)
+        self.bat_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5))
+        ttk.Button(bat_group, text="Browse Script", command=self.browse_bat).pack(side=tk.LEFT, padx=2)
+        ttk.Button(bat_group, text="Run Bat Script", command=self.execute_bat).pack(side=tk.RIGHT, padx=5)
 
     def bind_keyboard_navigation(self):
         self.app.root.bind("<Up>", lambda event: self.handle_arrow_navigation(-1))
@@ -292,6 +307,12 @@ class EditorTab:
         if frame_height > canvas_height:
             fraction = y_pos / float(frame_height)
             self.canvas.yview_moveto(max(0, fraction - (canvas_height / (2.0 * frame_height))))
+
+    def toggle_current_file_check(self):
+        if not self.selected_filename: return
+        var = self.file_checks.get(self.selected_filename)
+        if var:
+            var.set(not var.get())
 
     def browse_output_folder(self):
         folder = filedialog.askdirectory(title="Select Output Directory for Edited Cards")
@@ -402,7 +423,46 @@ class EditorTab:
         
         messagebox.showinfo("Saved", f"Exported file to target output folder:\n{new_filename}")
 
+    def overwrite_current_in_place(self):
+        """Directly updates the current image inside the source folder without renaming."""
+        if not self.selected_filename: return
+        filepath = os.path.join(self.app.current_folder, self.selected_filename)
+        
+        params = self._get_current_params()
+        # Passing save_path=filepath triggers an absolute file overwrite
+        process_image_advanced(filepath=filepath, save=True, save_path=filepath, **params)
+        
+        messagebox.showinfo("Overwritten", f"Overwrote original file source in place:\n{self.selected_filename}")
+        self.on_custom_file_click(self.selected_filename, self.selected_label_item)
+
+    def batch_overwrite_in_place(self):
+        """Overwrites all checked items inside the working source directory in place."""
+        if not self.app.current_folder: return
+        
+        selected_targets = [filename for filename, var in self.file_checks.items() if var.get()]
+        if not selected_targets:
+            messagebox.showwarning("No Selection", "No card checkboxes are ticked for overwrite operations.")
+            return
+            
+        confirm_msg = f"CRITICAL: This will permanently modify and overwrite {len(selected_targets)} raw source files in place without renaming or changing the CSV layout. Proceed?"
+        if not messagebox.askyesno("Confirm In-Place Overwrite", confirm_msg):
+            return
+
+        self.preview_lbl.config(image='', text="Processing structural overwrites... Please wait.")
+        self.app.root.update_idletasks()
+
+        params = self._get_current_params()
+        for filename in selected_targets:
+            filepath = os.path.join(self.app.current_folder, filename)
+            process_image_advanced(filepath=filepath, save=True, save_path=filepath, **params)
+            
+        messagebox.showinfo("Done", f"Successfully updated {len(selected_targets)} images inside the working source directory.")
+        if self.selected_filename:
+            self.on_custom_file_click(self.selected_filename, self.selected_label_item)
+
     def batch_apply_edits(self):
+        import csv 
+        
         if not self.app.current_folder: return
         out_dir = self.out_folder_var.get().strip()
         if not out_dir:
@@ -422,7 +482,7 @@ class EditorTab:
         self.app.root.update_idletasks()
 
         os.makedirs(out_dir, exist_ok=True)
-        created_filenames = []
+        processed_set = set()
         params = self._get_current_params()
         
         for filename in selected_targets:
@@ -432,19 +492,53 @@ class EditorTab:
             save_path = os.path.join(out_dir, new_filename)
             
             process_image_advanced(filepath=filepath, save=True, save_path=save_path, **params)
-            created_filenames.append(new_filename)
-            
-        # Build the tracking metadata CSV manifest in the output dir
-        csv_path = os.path.join(out_dir, "cards_data.csv")
-        try:
-            with open(csv_path, "w", encoding="utf-8") as f:
-                f.write("filename\n")
-                for name in created_filenames:
-                    f.write(f"{name}\n")
-        except Exception as e:
-            print(f"Failed to generate output CSV manifest records: {e}")
+            processed_set.add(filename)
+
+        src_csv_path = os.path.join(self.app.current_folder, "cards_data.csv")
+        dest_csv_path = os.path.join(out_dir, "cards_data.csv")
         
-        messagebox.showinfo("Done", f"Batch complete! Exported {len(selected_targets)} cards.\nGenerated fresh 'cards_data.csv' index tracking file.")
+        if os.path.exists(src_csv_path):
+            try:
+                with open(src_csv_path, 'r', encoding='utf-8') as f:
+                    sample = f.read(4096)
+                    if '\t' in sample:
+                        delim = '\t'
+                    elif ';' in sample:
+                        delim = ';'
+                    else:
+                        delim = ','
+
+                rows = []
+                with open(src_csv_path, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.DictReader(f, delimiter=delim, skipinitialspace=True)
+                    fieldnames = reader.fieldnames
+                    for row in reader:
+                        rows.append(dict(row))
+
+                for row in rows:
+                    orig_front = row.get('front name', '')
+                    orig_back = row.get('back name', '')
+                    
+                    if orig_front in processed_set:
+                        f_name, f_ext = os.path.splitext(orig_front)
+                        row['front name'] = f"{f_name}_edited{f_ext}"
+                        
+                    if orig_back in processed_set:
+                        b_name, b_ext = os.path.splitext(orig_back)
+                        row['back name'] = f"{b_name}_edited{b_ext}"
+
+                with open(dest_csv_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delim, quoting=csv.QUOTE_MINIMAL)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    
+                csv_status_msg = "\nMirrored and updated source 'cards_data.csv' to output folder."
+            except Exception as e:
+                csv_status_msg = f"\n[Warning] Could not update source CSV metadata: {e}"
+        else:
+            csv_status_msg = "\n[Warning] Source 'cards_data.csv' not found. Skip mapping updates."
+        
+        messagebox.showinfo("Done", f"Batch complete! Exported {len(selected_targets)} cards.{csv_status_msg}")
         self.preview_lbl.config(text="Batch complete. Select an image text to preview.")
 
     def _get_target_min_px(self):
@@ -581,9 +675,7 @@ class EditorTab:
             'spad_t': s_t,
             'spad_b': s_b,
             'spad_l': s_l,
-            'spad_r': s_r,
-            
-            'upscale_factor': self.upscale_var.get()
+            'spad_r': s_r
         }
 
     def execute_bat(self):
