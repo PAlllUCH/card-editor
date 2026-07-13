@@ -16,18 +16,60 @@ class EditorTab:
         self.orig_h_px = 0
         self.size_info_var = tk.StringVar(value="Select an image to see dimensions.")
         
+        # Track data structures for selection and sequence mechanics
+        self.file_checks = {}
+        self.file_labels = {}       # Maps filename -> tk.Label widget reference
+        self.filenames_list = []    # Keeps an ordered list of current files for step navigation
+        self.selected_label_item = None
+        self.selected_filename = None
+        
         self.build_ui()
+        self.bind_keyboard_navigation()
 
     def build_ui(self):
-        left_panel = ttk.Frame(self.frame, width=250)
+        # ----------------------------------------------------
+        # LEFT PANEL: Interactive Checkbox Queue & Directories
+        # ----------------------------------------------------
+        left_panel = ttk.Frame(self.frame, width=280)
         left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        left_panel.pack_propagate(False) 
         
         ttk.Button(left_panel, text="Load Folder via CSV", command=self.load_from_csv).pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(left_panel, text="Downloaded Cards:").pack(anchor=tk.W)
-        self.file_listbox = tk.Listbox(left_panel, width=30, exportselection=False)
-        self.file_listbox.pack(expand=True, fill=tk.Y, pady=5)
-        self.file_listbox.bind('<<ListboxSelect>>', self.on_file_select)
         
+        # New Target Output Directory Selector
+        out_group = ttk.LabelFrame(left_panel, text="Output Directory Setup", padding="5")
+        out_group.pack(fill=tk.X, pady=(0, 10))
+        self.out_folder_var = tk.StringVar()
+        ttk.Entry(out_group, textvariable=self.out_folder_var, width=18).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(out_group, text="Browse", command=self.browse_output_folder, width=6).pack(side=tk.RIGHT)
+        
+        tool_frame = ttk.Frame(left_panel)
+        tool_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Button(tool_frame, text="Select All", command=self.select_all_files, width=10).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(tool_frame, text="Deselect All", command=self.deselect_all_files, width=12).pack(side=tk.LEFT)
+        
+        ttk.Label(left_panel, text="Queue List (Click text to select preview):").pack(anchor=tk.W, pady=(5, 0))
+        
+        list_container = ttk.Frame(left_panel, relief=tk.SUNKEN, borderwidth=1)
+        list_container.pack(expand=True, fill=tk.BOTH, pady=5)
+        
+        self.canvas = tk.Canvas(list_container, bd=0, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # ----------------------------------------------------
+        # RIGHT PANEL: Main Processing Workflow
+        # ----------------------------------------------------
         right_panel = ttk.Frame(self.frame)
         right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
@@ -44,9 +86,18 @@ class EditorTab:
         col3 = ttk.Frame(controls)
         col3.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
-        # ----------------------------------------------------
-        # COL 1: CORNER FILL & BLENDING
-        # ----------------------------------------------------
+        # --- STEP 0: BACKGROUND REMOVAL ---
+        bg_group = ttk.LabelFrame(col1, text="0. Background Removal", padding="5")
+        bg_group.pack(fill=tk.X, pady=(0, 5))
+
+        self.bg_remove_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(bg_group, text="Enable Removal", variable=self.bg_remove_var).grid(row=0, column=0, sticky=tk.W)
+        
+        self.bg_method_var = tk.StringVar(value="Contour Isolation")
+        bg_methods = ["Contour Isolation", "GrabCut Auto"]
+        ttk.Combobox(bg_group, textvariable=self.bg_method_var, values=bg_methods, state="readonly", width=18).grid(row=0, column=1, sticky=tk.W, padx=5)
+
+        # --- STEP 1: CORNER FILL ---
         fill_group = ttk.LabelFrame(col1, text="1. Corner Fill Algorithm", padding="5")
         fill_group.pack(fill=tk.X, pady=(0, 5))
 
@@ -54,21 +105,22 @@ class EditorTab:
         ttk.Checkbutton(fill_group, text="Enable Fill", variable=self.fill_var).grid(row=0, column=0, sticky=tk.W)
         
         self.fill_mode = tk.StringVar(value="Dual-Axis Mirror")
-        modes = ["Telea Inpaint (Soft)", "Navier-Stokes (Sharp)", "Pixel Stretch", "Smooth Pixel Stretch", "Edge Mirror", "Dual-Axis Mirror"]
+        modes = ["Telea Inpaint (Soft)", "Navier-Stokes (Sharp)", "Pixel Stretch", "Smooth Pixel Stretch", "Edge Mirror", "Dual-Axis Mirror", "Gradient Edge Blend"]
         ttk.Combobox(fill_group, textvariable=self.fill_mode, values=modes, state="readonly", width=18).grid(row=0, column=1, sticky=tk.W, padx=5)
 
-        ttk.Label(fill_group, text="Corner Size (%):").grid(row=1, column=0, sticky=tk.E)
-        self.fill_size = tk.Scale(fill_group, from_=1, to=30, orient=tk.HORIZONTAL, length=100)
-        self.fill_size.set(10) 
-        self.fill_size.grid(row=1, column=1, sticky=tk.W)
+        self.fill_size_lbl = ttk.Label(fill_group, text="Corner Size:")
+        self.fill_size_lbl.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        self.fill_size = tk.Scale(fill_group, from_=0.1, to=15.0, resolution=0.1, orient=tk.HORIZONTAL, length=180, command=self.update_pixel_labels)
+        self.fill_size.set(3.0) 
+        self.fill_size.grid(row=2, column=0, columnspan=2, sticky=tk.EW)
 
-        ttk.Label(fill_group, text="Inpaint Radius:").grid(row=2, column=0, sticky=tk.E)
+        ttk.Label(fill_group, text="Inpaint Radius (px):").grid(row=3, column=0, sticky=tk.E, pady=(5, 0))
         self.inpaint_rad = tk.Scale(fill_group, from_=1, to=50, orient=tk.HORIZONTAL, length=100)
         self.inpaint_rad.set(15) 
-        self.inpaint_rad.grid(row=2, column=1, sticky=tk.W)
+        self.inpaint_rad.grid(row=3, column=1, sticky=tk.W, pady=(5, 0))
 
         # --- BLENDING SUB-GROUP ---
-        blend_group = ttk.LabelFrame(col1, text="2. Gradient Blending (%)", padding="5")
+        blend_group = ttk.LabelFrame(col1, text="2. Gradient Blending", padding="5")
         blend_group.pack(fill=tk.X)
 
         self.blend_var = tk.BooleanVar(value=True)
@@ -81,29 +133,29 @@ class EditorTab:
         ttk.Combobox(blend_group, textvariable=self.blend_type, values=["Shadow (Vignette)", "Blur (Soft)"], state="readonly", width=14).grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         ttk.Label(blend_group, text="Blend Style:").grid(row=1, column=0, sticky=tk.E)
 
-        ttk.Label(blend_group, text="Corner Fade (%):").grid(row=2, column=0, sticky=tk.E)
-        self.corner_fade = tk.Scale(blend_group, from_=0, to=50, orient=tk.HORIZONTAL, length=100)
-        self.corner_fade.set(15) 
-        self.corner_fade.grid(row=2, column=1, sticky=tk.W)
+        self.corner_fade_lbl = ttk.Label(blend_group, text="Corner Fade:")
+        self.corner_fade_lbl.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        self.corner_fade = tk.Scale(blend_group, from_=0.0, to=15.0, resolution=0.1, orient=tk.HORIZONTAL, length=180, command=self.update_pixel_labels)
+        self.corner_fade.set(2.0) 
+        self.corner_fade.grid(row=3, column=0, columnspan=2, sticky=tk.EW)
 
-        ttk.Label(blend_group, text="Margin Fade (%):").grid(row=3, column=0, sticky=tk.E)
-        self.margin_fade = tk.Scale(blend_group, from_=0, to=50, orient=tk.HORIZONTAL, length=100)
-        self.margin_fade.set(5) 
-        self.margin_fade.grid(row=3, column=1, sticky=tk.W)
+        self.margin_fade_lbl = ttk.Label(blend_group, text="Margin Fade:")
+        self.margin_fade_lbl.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(5, 0))
+        self.margin_fade = tk.Scale(blend_group, from_=0.0, to=10.0, resolution=0.1, orient=tk.HORIZONTAL, length=180, command=self.update_pixel_labels)
+        self.margin_fade.set(1.0) 
+        self.margin_fade.grid(row=5, column=0, columnspan=2, sticky=tk.EW)
 
-        ttk.Label(blend_group, text="Blend Strength (%):").grid(row=4, column=0, sticky=tk.E)
+        ttk.Label(blend_group, text="Blend Strength (%):").grid(row=6, column=0, sticky=tk.E, pady=5)
         self.blend_str = tk.Scale(blend_group, from_=1, to=100, orient=tk.HORIZONTAL, length=100)
         self.blend_str.set(100) 
-        self.blend_str.grid(row=4, column=1, sticky=tk.W)
+        self.blend_str.grid(row=6, column=1, sticky=tk.W, pady=5)
 
-        ttk.Label(blend_group, text="Add Grain/Noise:").grid(row=5, column=0, sticky=tk.E)
+        ttk.Label(blend_group, text="Add Grain/Noise:").grid(row=7, column=0, sticky=tk.E)
         self.noise_amount = tk.Scale(blend_group, from_=0, to=50, orient=tk.HORIZONTAL, length=100)
         self.noise_amount.set(5) 
-        self.noise_amount.grid(row=5, column=1, sticky=tk.W)
+        self.noise_amount.grid(row=7, column=1, sticky=tk.W)
 
-        # ----------------------------------------------------
-        # COL 2: COLOR GRADING
-        # ----------------------------------------------------
+        # --- COL 2: COLOR GRADING ---
         color_group = ttk.LabelFrame(col2, text="3. Color Grading", padding="5")
         color_group.pack(fill=tk.BOTH, expand=True)
 
@@ -132,9 +184,7 @@ class EditorTab:
         self.col_sepia.grid(row=4, column=1, sticky=tk.W)
         self.apply_color_preset()
 
-        # ----------------------------------------------------
-        # COL 3: PHYSICAL SIZING & BLEED (SPAD)
-        # ----------------------------------------------------
+        # --- COL 3: PHYSICAL SIZING & BLEED ---
         size_group = ttk.LabelFrame(col3, text="4. Sizing & Bleed (Spad)", padding="5")
         size_group.pack(fill=tk.BOTH, expand=True)
 
@@ -182,9 +232,7 @@ class EditorTab:
         calc_lbl = tk.Label(size_group, textvariable=self.size_info_var, justify=tk.LEFT, bg="#333", fg="#0f0", font=("Consolas", 8))
         calc_lbl.pack(fill=tk.X, pady=(10, 0))
 
-        # ----------------------------------------------------
-        # ACTIONS / BAT
-        # ----------------------------------------------------
+        # --- ACTIONS / BAT FRAME ---
         actions = ttk.Frame(right_panel)
         actions.pack(fill=tk.X, pady=10)
 
@@ -192,9 +240,13 @@ class EditorTab:
         self.upscale_var = tk.StringVar(value="1.0")
         ttk.Combobox(actions, textvariable=self.upscale_var, values=["1.0", "1.5", "2.0"], width=5, state="readonly").pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(actions, text="Preview Edit", command=self.preview_current_edit).pack(side=tk.LEFT, padx=15)
+        # Sequential Navigation Buttons
+        ttk.Button(actions, text="◀ Prev", command=lambda: self.navigate_queue(-1), width=6).pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Button(actions, text="Next ▶", command=lambda: self.navigate_queue(1), width=6).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Button(actions, text="Preview Edit", command=self.preview_current_edit).pack(side=tk.LEFT, padx=5)
         ttk.Button(actions, text="Save Current", command=self.save_current_edit).pack(side=tk.LEFT, padx=5)
-        ttk.Button(actions, text="Batch Apply to ALL", command=self.batch_apply_edits).pack(side=tk.LEFT, padx=5)
+        ttk.Button(actions, text="Batch Apply to SELECTED", command=self.batch_apply_edits).pack(side=tk.LEFT, padx=5)
         
         bat_frame = ttk.Frame(right_panel)
         bat_frame.pack(fill=tk.X, pady=5)
@@ -204,9 +256,228 @@ class EditorTab:
         ttk.Button(bat_frame, text="Browse", command=self.browse_bat).pack(side=tk.LEFT, padx=5)
         ttk.Button(bat_frame, text="Run Bat Script", command=self.execute_bat).pack(side=tk.RIGHT, padx=5)
 
-    # --- Methods [update_size_labels, load_from_csv, apply_color_preset, browse_bat, load_editor_files, on_file_select, _get_current_params, preview_current_edit, save_current_edit, batch_apply_edits, execute_bat] remain unchanged ---
+    def bind_keyboard_navigation(self):
+        self.app.root.bind("<Up>", lambda event: self.handle_arrow_navigation(-1))
+        self.app.root.bind("<Down>", lambda event: self.handle_arrow_navigation(1))
+
+    def handle_arrow_navigation(self, direction):
+        focused_widget = self.app.root.focus_get()
+        if isinstance(focused_widget, (tk.Entry, ttk.Entry, ttk.Combobox)):
+            return 
+        self.navigate_queue(direction)
+
+    def navigate_queue(self, direction):
+        if not self.filenames_list: return
+        if self.selected_filename in self.filenames_list:
+            curr_idx = self.filenames_list.index(self.selected_filename)
+            new_idx = curr_idx + direction
+            new_idx = max(0, min(new_idx, len(self.filenames_list) - 1))
+        else:
+            new_idx = 0
+            
+        target_file = self.filenames_list[new_idx]
+        target_label = self.file_labels.get(target_file)
+        
+        if target_label:
+            self.on_custom_file_click(target_file, target_label)
+            self.scroll_to_visible(target_label)
+
+    def scroll_to_visible(self, label_widget):
+        self.canvas.update_idletasks()
+        row_frame = label_widget.master 
+        y_pos = row_frame.winfo_y()
+        frame_height = self.scrollable_frame.winfo_height()
+        canvas_height = self.canvas.winfo_height()
+        
+        if frame_height > canvas_height:
+            fraction = y_pos / float(frame_height)
+            self.canvas.yview_moveto(max(0, fraction - (canvas_height / (2.0 * frame_height))))
+
+    def browse_output_folder(self):
+        folder = filedialog.askdirectory(title="Select Output Directory for Edited Cards")
+        if folder:
+            self.out_folder_var.set(folder)
+
+    def load_from_csv(self):
+        filepath = filedialog.askopenfilename(
+            title="Select cards_data.csv", 
+            filetypes=(("CSV Files", "*.csv"), ("All files", "*.*"))
+        )
+        if filepath:
+            self.app.current_folder = os.path.dirname(filepath)
+            self.load_editor_files()
+            messagebox.showinfo("Loaded", f"Loaded directory:\n{self.app.current_folder}")
+
+    def load_editor_files(self):
+        for child in self.scrollable_frame.winfo_children():
+            child.destroy()
+        self.file_checks.clear()
+        self.file_labels.clear()
+        self.filenames_list = []
+        self.selected_label_item = None
+        self.selected_filename = None
+
+        if not self.app.current_folder: return
+        valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
+        sorted_files = sorted(os.listdir(self.app.current_folder))
+        
+        for file in sorted_files:
+            if file.lower().endswith(valid_exts):
+                self.filenames_list.append(file)
+                row = ttk.Frame(self.scrollable_frame)
+                row.pack(fill=tk.X, anchor=tk.W, pady=1, padx=2)
+                
+                var = tk.BooleanVar(value=True)
+                self.file_checks[file] = var
+                
+                cb = ttk.Checkbutton(row, variable=var)
+                cb.pack(side=tk.LEFT)
+                
+                lbl = tk.Label(row, text=file, anchor=tk.W, bg=self.frame.winfo_toplevel().cget("bg"), fg="black", padx=3)
+                lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                
+                self.file_labels[file] = lbl
+                lbl.bind("<Button-1>", lambda event, f=file, l=lbl: self.on_custom_file_click(f, l))
+
+    def on_custom_file_click(self, filename, label_widget):
+        if self.selected_label_item:
+            self.selected_label_item.config(bg=self.frame.winfo_toplevel().cget("bg"), fg="black")
+            
+        self.selected_label_item = label_widget
+        self.selected_filename = filename
+        label_widget.config(bg="#0078d7", fg="white") 
+        
+        filepath = os.path.join(self.app.current_folder, filename)
+        try:
+            file_bytes = np.fromfile(filepath, dtype=np.uint8)
+            img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
+            if img is not None:
+                self.orig_h_px, self.orig_w_px = img.shape[:2]
+                self.update_size_labels() 
+                
+                if len(img.shape) == 3 and img.shape[2] == 4:
+                    img = img[:, :, :3]
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                from PIL import Image
+                self.preview_lbl.display_image(Image.fromarray(rgb))
+        except Exception as e:
+            self.preview_lbl.config(image='', text=f"Error loading original:\n{e}")
+
+    def select_all_files(self):
+        for var in self.file_checks.values():
+            var.set(True)
+
+    def deselect_all_files(self):
+        for var in self.file_checks.values():
+            var.set(False)
+
+    def preview_current_edit(self):
+        if not self.selected_filename:
+            messagebox.showinfo("Select", "Click on a card filename text in the queue to select it for preview first.")
+            return
+            
+        filepath = os.path.join(self.app.current_folder, self.selected_filename)
+        self.preview_lbl.config(image='', text="Processing preview...")
+        self.app.root.update_idletasks() 
+        
+        params = self._get_current_params()
+        img = process_image_advanced(filepath=filepath, save=False, **params)
+        self.preview_lbl.display_image(img)
+
+    def save_current_edit(self):
+        if not self.selected_filename: return
+        out_dir = self.out_folder_var.get().strip()
+        if not out_dir:
+            messagebox.showerror("Error", "Please configure your Output Directory first.")
+            return
+            
+        os.makedirs(out_dir, exist_ok=True)
+        filepath = os.path.join(self.app.current_folder, self.selected_filename)
+        name, ext = os.path.splitext(self.selected_filename)
+        new_filename = f"{name}_edited{ext}"
+        save_path = os.path.join(out_dir, new_filename)
+        
+        params = self._get_current_params()
+        process_image_advanced(filepath=filepath, save=True, save_path=save_path, **params)
+        
+        messagebox.showinfo("Saved", f"Exported file to target output folder:\n{new_filename}")
+
+    def batch_apply_edits(self):
+        if not self.app.current_folder: return
+        out_dir = self.out_folder_var.get().strip()
+        if not out_dir:
+            messagebox.showerror("Error", "Please configure your Output Directory first.")
+            return
+        
+        selected_targets = [filename for filename, var in self.file_checks.items() if var.get()]
+        if not selected_targets:
+            messagebox.showwarning("No Selection", "No card checkboxes are ticked for batch operations.")
+            return
+            
+        confirm_msg = f"This will process and export {len(selected_targets)} cards to the target directory. Proceed?"
+        if not messagebox.askyesno("Confirm Batch", confirm_msg):
+            return
+
+        self.preview_lbl.config(image='', text="Processing batch selection... Please wait.")
+        self.app.root.update_idletasks()
+
+        os.makedirs(out_dir, exist_ok=True)
+        created_filenames = []
+        params = self._get_current_params()
+        
+        for filename in selected_targets:
+            filepath = os.path.join(self.app.current_folder, filename)
+            name, ext = os.path.splitext(filename)
+            new_filename = f"{name}_edited{ext}"
+            save_path = os.path.join(out_dir, new_filename)
+            
+            process_image_advanced(filepath=filepath, save=True, save_path=save_path, **params)
+            created_filenames.append(new_filename)
+            
+        # Build the tracking metadata CSV manifest in the output dir
+        csv_path = os.path.join(out_dir, "cards_data.csv")
+        try:
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("filename\n")
+                for name in created_filenames:
+                    f.write(f"{name}\n")
+        except Exception as e:
+            print(f"Failed to generate output CSV manifest records: {e}")
+        
+        messagebox.showinfo("Done", f"Batch complete! Exported {len(selected_targets)} cards.\nGenerated fresh 'cards_data.csv' index tracking file.")
+        self.preview_lbl.config(text="Batch complete. Select an image text to preview.")
+
+    def _get_target_min_px(self):
+        try:
+            dpi = float(self.dpi_var.get() or 300)
+            if self.resize_var.get():
+                base_w = float(self.base_w.get() or 0)
+                base_h = float(self.base_h.get() or 0)
+                w_px = int((base_w / 25.4) * dpi)
+                h_px = int((base_h / 25.4) * dpi)
+            else:
+                w_px = self.orig_w_px
+                h_px = self.orig_h_px
+            return min(w_px, h_px) if (w_px and h_px) else 0
+        except ValueError:
+            return 0
+
+    def update_pixel_labels(self, *args):
+        min_px = self._get_target_min_px()
+        fs_val = float(self.fill_size.get())
+        cf_val = float(self.corner_fade.get())
+        mf_val = float(self.margin_fade.get())
+        
+        if min_px > 0:
+            self.fill_size_lbl.config(text=f"Corner Size: {fs_val:.1f}% ({int(min_px * fs_val / 100)} px)")
+            self.corner_fade_lbl.config(text=f"Corner Fade: {cf_val:.1f}% ({int(min_px * cf_val / 100)} px)")
+            self.margin_fade_lbl.config(text=f"Margin Fade: {mf_val:.1f}% ({int(min_px * mf_val / 100)} px)")
+        else:
+            self.fill_size_lbl.config(text=f"Corner Size: {fs_val:.1f}% (-- px)")
+            self.corner_fade_lbl.config(text=f"Corner Fade: {cf_val:.1f}% (-- px)")
+            self.margin_fade_lbl.config(text=f"Margin Fade: {mf_val:.1f}% (-- px)")
+
     def update_size_labels(self, *args):
-        # (This method remains unchanged as per previous instruction)
         try:
             dpi = float(self.dpi_var.get() or 300)
             if dpi <= 0: return
@@ -237,18 +508,9 @@ class EditorTab:
             info_str += f"Final Px: {final_w_px} x {final_h_px}"
             
             self.size_info_var.set(info_str)
+            self.update_pixel_labels()
         except ValueError:
             self.size_info_var.set("Waiting for valid numbers...")
-
-    def load_from_csv(self):
-        filepath = filedialog.askopenfilename(
-            title="Select cards_data.csv", 
-            filetypes=(("CSV Files", "*.csv"), ("All files", "*.*"))
-        )
-        if filepath:
-            self.app.current_folder = os.path.dirname(filepath)
-            self.load_editor_files()
-            messagebox.showinfo("Loaded", f"Loaded directory:\n{self.app.current_folder}")
 
     def apply_color_preset(self, event=None):
         preset = self.color_preset.get()
@@ -258,7 +520,6 @@ class EditorTab:
             'Dark & Gritty': {'sat': 85, 'con': 115, 'bri': -10, 'sepia': 0},
             'Vintage Sepia': {'sat': 80, 'con': 100, 'bri': 0, 'sepia': 65}
         }
-        
         if preset in presets:
             vals = presets[preset]
             self.col_sat.set(vals['sat'])
@@ -270,36 +531,6 @@ class EditorTab:
         filename = filedialog.askopenfilename(title="Select Batch File", filetypes=(("Batch files", "*.bat"), ("All files", "*.*")))
         if filename:
             self.bat_entry.delete(0, tk.END); self.bat_entry.insert(0, filename)
-
-    def load_editor_files(self):
-        self.file_listbox.delete(0, tk.END)
-        if not self.app.current_folder: return
-        valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
-        for file in os.listdir(self.app.current_folder):
-            if file.lower().endswith(valid_exts):
-                self.file_listbox.insert(tk.END, file)
-
-    def on_file_select(self, event):
-        selection = self.file_listbox.curselection()
-        if not selection: return
-        
-        filename = self.file_listbox.get(selection[0])
-        filepath = os.path.join(self.app.current_folder, filename)
-        
-        try:
-            file_bytes = np.fromfile(filepath, dtype=np.uint8)
-            img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
-            if img is not None:
-                self.orig_h_px, self.orig_w_px = img.shape[:2]
-                self.update_size_labels() 
-                
-                if len(img.shape) == 3 and img.shape[2] == 4:
-                    img = img[:, :, :3]
-                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                from PIL import Image
-                self.preview_lbl.display_image(Image.fromarray(rgb))
-        except Exception as e:
-            self.preview_lbl.config(image='', text=f"Error loading original:\n{e}")
 
     def _get_current_params(self):
         self.color_preset.set("Custom")
@@ -319,6 +550,9 @@ class EditorTab:
         except ValueError: s_r = 0
 
         return {
+            'do_bg_remove': self.bg_remove_var.get(),
+            'bg_method': self.bg_method_var.get(),
+            
             'do_resize_mm': self.resize_var.get(),
             'target_w_mm': t_w,
             'target_h_mm': t_h,
@@ -326,14 +560,14 @@ class EditorTab:
             
             'do_corner_fill': self.fill_var.get(),
             'fill_mode': self.fill_mode.get(),
-            'corner_size': self.fill_size.get(),
+            'corner_size': float(self.fill_size.get()),
             'inpaint_radius': self.inpaint_rad.get(),
             
             'do_blend': self.blend_var.get(),
             'blend_stage': self.blend_stage.get(),
             'blend_type': self.blend_type.get(),
-            'corner_fade': self.corner_fade.get(),
-            'margin_fade': self.margin_fade.get(),
+            'corner_fade': float(self.corner_fade.get()),
+            'margin_fade': float(self.margin_fade.get()),
             'blend_strength': self.blend_str.get(),
             'noise_amount': self.noise_amount.get(),
             
@@ -352,58 +586,11 @@ class EditorTab:
             'upscale_factor': self.upscale_var.get()
         }
 
-    def preview_current_edit(self):
-        selection = self.file_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Select", "Select an image from the list first.")
-            return
-            
-        filename = self.file_listbox.get(selection[0])
-        filepath = os.path.join(self.app.current_folder, filename)
-        
-        self.preview_lbl.config(image='', text="Processing preview...")
-        self.app.root.update_idletasks() 
-        
-        params = self._get_current_params()
-        img = process_image_advanced(filepath=filepath, save=False, **params)
-        self.preview_lbl.display_image(img)
-
-    def save_current_edit(self):
-        selection = self.file_listbox.curselection()
-        if not selection: return
-        
-        filename = self.file_listbox.get(selection[0])
-        filepath = os.path.join(self.app.current_folder, filename)
-        
-        params = self._get_current_params()
-        process_image_advanced(filepath=filepath, save=True, **params)
-        
-        messagebox.showinfo("Saved", f"Overwrote {filename} with edits.")
-        self.on_file_select(None) 
-
-    def batch_apply_edits(self):
-        if not self.app.current_folder: return
-        if not messagebox.askyesno("Confirm Batch", "This will permanently overwrite all downloaded images with the current settings. Proceed?"):
-            return
-
-        self.preview_lbl.config(image='', text="Processing batch... Please wait.")
-        self.app.root.update_idletasks()
-
-        params = self._get_current_params()
-        items = self.file_listbox.get(0, tk.END)
-        for filename in items:
-            filepath = os.path.join(self.app.current_folder, filename)
-            process_image_advanced(filepath=filepath, save=True, **params)
-        
-        messagebox.showinfo("Done", "Batch processing complete.")
-        self.preview_lbl.config(text="Batch complete. Select an image.")
-
     def execute_bat(self):
         bat_path = self.bat_entry.get().strip()
         if not bat_path or not os.path.exists(bat_path):
             messagebox.showerror("Error", "Please select a valid .bat file.")
             return
-            
         if not self.app.current_folder:
             messagebox.showerror("Error", "No scraped folder found to execute in.")
             return
@@ -411,7 +598,6 @@ class EditorTab:
         try:
             self.preview_lbl.config(image='', text="Running BAT script...\nCheck Scraper console for logs.")
             self.app.root.update_idletasks()
-            
             self.app.notebook.select(self.app.scraper_tab.frame)
             self.app.scraper_tab.log("\n[ EXECUTING .BAT SCRIPT ]")
             

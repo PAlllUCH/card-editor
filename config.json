@@ -1,9 +1,9 @@
 {
     "kie_api_key": "21ff0a99c46483071f1d6d178ae27739",
-    "last_csv_path": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/NightOfTheZealot/cards_data.csv",
+    "last_csv_path": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/PathToCarcosa/cards_data.csv",
     "last_model": "nano-banana-2-2k (4 credits / ~$0.02 USD)",
     "upscale_factor": "2",
-    "output_dir": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/NightOfTheZealot\\upscaled",
+    "output_dir": "C:/Users/Kamil/Documents/VSCode/card-editor/downloaded_cards/PathToCarcosa\\upscaled",
     "last_engine": "Local Upscayl",
     "kie_extra_params": "{}",
     "custom_prompt": "upscale and clean the image. make sure that all texts remain the same",
