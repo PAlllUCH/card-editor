@@ -1,0 +1,10 @@
+{
+    "kie_api_key": "21ff0a99c46483071f1d6d178ae27739",
+    "last_csv_path": "E:/Plansz\u00f3wki/Arkham/test4/downloaded_cards/ThePathtoCarcosa.244a8e/cards_data.csv",
+    "last_model": "nano-banana-2-2k (4 credits / ~$0.02 USD)",
+    "upscale_factor": "2",
+    "output_dir": "E:/Plansz\u00f3wki/Arkham/test4/downloaded_cards/ThePathtoCarcosa.244a8e\\upscaled",
+    "last_engine": "KIE.ai",
+    "kie_extra_params": "{}",
+    "custom_prompt": "upscale and clean the image. make sure that all texts remain the same"
+}
