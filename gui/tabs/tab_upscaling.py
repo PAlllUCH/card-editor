@@ -7,7 +7,8 @@ from PIL import Image
 import numpy as np
 import cv2
 
-from core.upscaler import upscale_image_pipeline
+# Import the new local execution pipeline
+from core.upscaler import upscale_image_pipeline, upscale_image_local_upscayl
 from gui.components.image_preview import ImagePreviewComponent
 
 CONFIG_FILE = "config.json"
@@ -43,6 +44,11 @@ class UpscalingTab:
         if hasattr(self, "extra_params_var"):
             self.config_data["kie_extra_params"] = self.extra_params_var.get().strip()
             
+        # Save local engine parameters
+        self.config_data["upscayl_bin_path"] = self.local_bin_var.get().strip()
+        self.config_data["local_model"] = self.local_model_var.get()
+        self.config_data["local_factor"] = self.local_factor_var.get()
+
         if hasattr(self, "engine_notebook"):
             try:
                 selected_tab_text = self.engine_notebook.tab(self.engine_notebook.select(), "text")
@@ -73,6 +79,14 @@ class UpscalingTab:
             self.custom_prompt_var.set(self.config_data["custom_prompt"])
         if "kie_extra_params" in self.config_data:
             self.extra_params_var.set(self.config_data["kie_extra_params"])
+            
+        # Load local engine settings
+        if "upscayl_bin_path" in self.config_data:
+            self.local_bin_var.set(self.config_data["upscayl_bin_path"])
+        if "local_model" in self.config_data:
+            self.local_model_var.set(self.config_data["local_model"])
+        if "local_factor" in self.config_data:
+            self.local_factor_var.set(self.config_data["local_factor"])
             
         if "last_engine" in self.config_data and hasattr(self, "engine_notebook"):
             last_eng = self.config_data["last_engine"]
@@ -116,7 +130,7 @@ class UpscalingTab:
         self.engine_notebook.pack(fill=tk.X, pady=(0, 5))
         self.engine_notebook.bind("<<NotebookTabChanged>>", lambda e: self.save_config())
 
-        # Tab 1: KIE.ai
+        # ==================== TAB 1: KIE.ai ====================
         self.kie_tab = ttk.Frame(self.engine_notebook, padding="10")
         self.engine_notebook.add(self.kie_tab, text="KIE.ai")
 
@@ -128,7 +142,6 @@ class UpscalingTab:
         )
         kie_desc.pack(anchor=tk.W, pady=(0, 10))
 
-        # Row 1: API Key
         row1 = ttk.Frame(self.kie_tab)
         row1.pack(fill=tk.X, pady=2)
         
@@ -140,7 +153,6 @@ class UpscalingTab:
         self.show_key_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row1, text="Show", variable=self.show_key_var, command=self.toggle_key_visibility).pack(side=tk.LEFT)
 
-        # Row 1b: Credit Balance Info
         row1b = ttk.Frame(self.kie_tab)
         row1b.pack(fill=tk.X, pady=(2, 6))
         ttk.Label(row1b, text="KIE Credits:", width=16, anchor=tk.W).pack(side=tk.LEFT)
@@ -149,7 +161,6 @@ class UpscalingTab:
         self.refresh_balance_btn = ttk.Button(row1b, text="Refresh Balance", command=self.refresh_balance, width=15)
         self.refresh_balance_btn.pack(side=tk.LEFT)
 
-        # Row 2: Model & Factor Selection
         row2 = ttk.Frame(self.kie_tab)
         row2.pack(fill=tk.X, pady=6)
 
@@ -173,7 +184,6 @@ class UpscalingTab:
         self.factor_cb = ttk.Combobox(row2, textvariable=self.factor_var, values=["2", "4"], state="readonly", width=5)
         self.factor_cb.pack(side=tk.LEFT, padx=(5, 0))
 
-        # Row 2b: Custom Prompt (NEW)
         row_prompt = ttk.Frame(self.kie_tab)
         row_prompt.pack(fill=tk.X, pady=6)
         ttk.Label(row_prompt, text="Custom Prompt:", width=16, anchor=tk.W).pack(side=tk.LEFT)
@@ -181,7 +191,6 @@ class UpscalingTab:
         self.custom_prompt_entry = ttk.Entry(row_prompt, textvariable=self.custom_prompt_var)
         self.custom_prompt_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Row 2c: Extra parameters (JSON)
         row_extra = ttk.Frame(self.kie_tab)
         row_extra.pack(fill=tk.X, pady=6)
         ttk.Label(row_extra, text="Extra Params (JSON):", width=16, anchor=tk.W).pack(side=tk.LEFT)
@@ -189,17 +198,50 @@ class UpscalingTab:
         self.extra_params_entry = ttk.Entry(row_extra, textvariable=self.extra_params_var)
         self.extra_params_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Tab 2: Future / Local Engine Placeholder
+        # ==================== TAB 2: LOCAL UPSCAYL ====================
         self.future_tab = ttk.Frame(self.engine_notebook, padding="10")
-        self.engine_notebook.add(self.future_tab, text="Local / Other (Future)")
+        self.engine_notebook.add(self.future_tab, text="Local Upscayl")
         
-        future_desc = ttk.Label(
+        local_desc = ttk.Label(
             self.future_tab,
-            text="Modular engine placeholder.\nIn the future, you can configure other cloud providers or run\na local upscaler model (e.g. Real-ESRGAN) directly on your GPU.",
+            text="Upscayl uses local GPU capabilities via its CLI tool.\nRequires 'upscayl-bin' or the executable command setup on your host.",
             font=("Segoe UI", 9, "italic"),
             justify=tk.LEFT
         )
-        future_desc.pack(anchor=tk.W, pady=(0, 10))
+        local_desc.pack(anchor=tk.W, pady=(0, 10))
+
+        # CLI Executable File Path Row
+        local_row1 = ttk.Frame(self.future_tab)
+        local_row1.pack(fill=tk.X, pady=4)
+        ttk.Label(local_row1, text="Upscayl Executable:", width=18, anchor=tk.W).pack(side=tk.LEFT)
+        self.local_bin_var = tk.StringVar(value="upscayl")
+        self.local_bin_entry = ttk.Entry(local_row1, textvariable=self.local_bin_var)
+        self.local_bin_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(local_row1, text="Browse...", command=self.browse_upscayl_bin, width=9).pack(side=tk.RIGHT)
+
+        # Model and Scale Factor Controls
+        local_row2 = ttk.Frame(self.future_tab)
+        local_row2.pack(fill=tk.X, pady=6)
+        
+        ttk.Label(local_row2, text="Local Model:", width=18, anchor=tk.W).pack(side=tk.LEFT)
+        self.local_model_var = tk.StringVar(value="ultrasharp-4x")
+        
+        # FIXED: Correct names corresponding to Upscayl's file architecture
+        upscayl_models = [
+            "upscayl-standard-4x",
+            "upscayl-lite-4x",
+            "digital-art-4x",
+            "ultrasharp-4x",
+            "remacri-4x",
+            "ultramix-balanced-4x"
+        ]
+        self.local_model_cb = ttk.Combobox(local_row2, textvariable=self.local_model_var, values=upscayl_models, state="readonly", width=20)
+        self.local_model_cb.pack(side=tk.LEFT, padx=(0, 15))
+
+        ttk.Label(local_row2, text="Scale:").pack(side=tk.LEFT)
+        self.local_factor_var = tk.StringVar(value="4")
+        self.local_factor_cb = ttk.Combobox(local_row2, textvariable=self.local_factor_var, values=["2", "3", "4"], state="readonly", width=4)
+        self.local_factor_cb.pack(side=tk.LEFT, padx=(5, 0))
 
         # Shared Destination Output Configuration Frame
         output_frame = ttk.LabelFrame(right_panel, text="Output Configuration", padding="10")
@@ -227,6 +269,15 @@ class UpscalingTab:
         self.console = scrolledtext.ScrolledText(right_panel, wrap=tk.WORD, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 9), height=10)
         self.console.pack(expand=True, fill=tk.BOTH, pady=(5, 0))
 
+    def browse_upscayl_bin(self):
+        filename = filedialog.askopenfilename(
+            title="Select Upscayl Binary / Executable",
+            filetypes=(("Executable Files", "*.exe"), ("All files", "*.*"))
+        )
+        if filename:
+            self.local_bin_var.set(filename)
+            self.save_config()
+
     def toggle_key_visibility(self):
         if self.show_key_var.get():
             self.api_key_entry.config(show="")
@@ -251,7 +302,6 @@ class UpscalingTab:
             self.csv_path_var.set(filename)
             self.load_files_from_csv(filename)
             
-            # Default Output folder to [csv_dir]/upscaled
             dir_name = os.path.dirname(filename)
             self.out_dir_var.set(os.path.join(dir_name, "upscaled"))
             self.save_config()
@@ -345,14 +395,15 @@ class UpscalingTab:
                 try:
                     params = json.loads(extra_params_str)
                     if not isinstance(params, dict):
-                        messagebox.showerror("Error", "Extra parameters JSON must be an object (e.g., {\"key\": \"value\"}).")
+                        messagebox.showerror("Error", "Extra parameters JSON must be an object.")
                         return False
                 except json.JSONDecodeError as e:
                     messagebox.showerror("Error", f"Invalid JSON in Extra Params:\n{e}")
                     return False
-        elif selected_engine == "Local / Other (Future)":
-            messagebox.showwarning("Not Implemented", "The Local / Other engine is a modular placeholder. Please use KIE.ai to upscale images.")
-            return False
+        elif selected_engine == "Local Upscayl":
+            if not self.local_bin_var.get().strip():
+                messagebox.showerror("Error", "Please configure the Upscayl execution path/binary.")
+                return False
             
         csv_path = self.csv_path_var.get().strip()
         if not csv_path or not os.path.exists(csv_path):
@@ -385,35 +436,42 @@ class UpscalingTab:
         self.console.delete(1.0, tk.END)
         self.console.config(state=tk.DISABLED)
         
+        selected_engine = self.engine_notebook.tab(self.engine_notebook.select(), "text")
+        output_dir = self.out_dir_var.get().strip()
+
+        # Gather engine-specific configurations
         api_key = self.api_key_var.get().strip()
         model = self.get_api_model()
         factor = self.factor_var.get()
-        output_dir = self.out_dir_var.get().strip()
         custom_prompt = self.custom_prompt_var.get().strip()
-        
         extra_params_str = self.extra_params_var.get().strip()
         extra_params = json.loads(extra_params_str) if extra_params_str else {}
+
+        upscayl_bin = self.local_bin_var.get().strip()
+        local_model = self.local_model_var.get()
+        local_factor = self.local_factor_var.get()
         
         def run():
             try:
-                self.log(f"Starting upscale for single image: {filename}")
-                out_path = upscale_image_pipeline(
-                    file_path=filepath,
-                    model=model,
-                    api_key=api_key,
-                    output_dir=output_dir,
-                    upscale_factor=factor,
-                    log_fn=self.log,
-                    extra_params=extra_params,
-                    custom_prompt=custom_prompt
-                )
+                if selected_engine == "KIE.ai":
+                    self.log(f"Starting cloud upscale for single image: {filename}")
+                    out_path = upscale_image_pipeline(
+                        file_path=filepath, model=model, api_key=api_key, output_dir=output_dir,
+                        upscale_factor=factor, log_fn=self.log, extra_params=extra_params, custom_prompt=custom_prompt
+                    )
+                else:
+                    out_path = upscale_image_local_upscayl(
+                        file_path=filepath, model=local_model, upscayl_bin=upscayl_bin,
+                        output_dir=output_dir, upscale_factor=local_factor, log_fn=self.log
+                    )
                 self.log(f"[SUCCESS] Upscaled file saved to: {out_path}")
                 self.app.root.after(0, lambda: messagebox.showinfo("Finished", f"Upscaling finished successfully!\nSaved to: {out_path}"))
             except Exception as e:
                 self.log(f"[ERROR] Upscale failed: {str(e)}")
             finally:
                 self.app.root.after(0, lambda: self.set_buttons_state(tk.NORMAL))
-                self.app.root.after(0, self.refresh_balance)
+                if selected_engine == "KIE.ai":
+                    self.app.root.after(0, self.refresh_balance)
                 
         threading.Thread(target=run, daemon=True).start()
 
@@ -427,7 +485,7 @@ class UpscalingTab:
             return
             
         selected_engine = self.engine_notebook.tab(self.engine_notebook.select(), "text")
-        if not messagebox.askyesno("Confirm Bulk Upscale", f"Are you sure you want to upscale all {len(files)} images in bulk using {selected_engine}? This will consume credits/resources."):
+        if not messagebox.askyesno("Confirm Bulk Upscale", f"Are you sure you want to upscale all {len(files)} images in bulk using {selected_engine}?"):
             return
             
         self.save_config()
@@ -436,16 +494,20 @@ class UpscalingTab:
         self.console.delete(1.0, tk.END)
         self.console.config(state=tk.DISABLED)
         
-        api_key = self.api_key_var.get().strip()
-        model = self.get_api_model()
-        factor = self.factor_var.get()
         output_dir = self.out_dir_var.get().strip()
         csv_path = self.csv_path_var.get().strip()
         base_folder = os.path.dirname(csv_path)
+
+        api_key = self.api_key_var.get().strip()
+        model = self.get_api_model()
+        factor = self.factor_var.get()
         custom_prompt = self.custom_prompt_var.get().strip()
-        
         extra_params_str = self.extra_params_var.get().strip()
         extra_params = json.loads(extra_params_str) if extra_params_str else {}
+
+        upscayl_bin = self.local_bin_var.get().strip()
+        local_model = self.local_model_var.get()
+        local_factor = self.local_factor_var.get()
         
         def run():
             success_count = 0
@@ -454,16 +516,16 @@ class UpscalingTab:
                 filepath = os.path.join(base_folder, filename)
                 self.log(f"\n--- [{idx}/{len(files)}] Processing {filename} ---")
                 try:
-                    upscale_image_pipeline(
-                        file_path=filepath,
-                        model=model,
-                        api_key=api_key,
-                        output_dir=output_dir,
-                        upscale_factor=factor,
-                        log_fn=self.log,
-                        extra_params=extra_params,
-                        custom_prompt=custom_prompt
-                    )
+                    if selected_engine == "KIE.ai":
+                        upscale_image_pipeline(
+                            file_path=filepath, model=model, api_key=api_key, output_dir=output_dir,
+                            upscale_factor=factor, log_fn=self.log, extra_params=extra_params, custom_prompt=custom_prompt
+                        )
+                    else:
+                        upscale_image_local_upscayl(
+                            file_path=filepath, model=local_model, upscayl_bin=upscayl_bin,
+                            output_dir=output_dir, upscale_factor=local_factor, log_fn=self.log
+                        )
                     success_count += 1
                 except Exception as e:
                     self.log(f"[ERROR] Failed to upscale {filename}: {str(e)}")
@@ -480,7 +542,8 @@ class UpscalingTab:
                 f"Completed {len(files)} files.\nSuccess: {success_count}\nFailed: {fail_count}"
             ))
             self.app.root.after(0, lambda: self.set_buttons_state(tk.NORMAL))
-            self.app.root.after(0, self.refresh_balance)
+            if selected_engine == "KIE.ai":
+                self.app.root.after(0, self.refresh_balance)
             
         threading.Thread(target=run, daemon=True).start()
 

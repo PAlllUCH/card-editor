@@ -70,16 +70,14 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
         callbacks['log'](f"Error: {e}"); callbacks['finish'](None, [])
         return
 
-    folder_name = folder_path.split('/')[-1]
-    output_path = os.path.join(output_dir, folder_name)
-    
-    images_path = os.path.join(output_path, "images")
-    os.makedirs(images_path, exist_ok=True)
-    callbacks['log'](f"Saving images to: {images_path}")
+    # FIXED: Using output_dir directly, skipping automatic sub-folder generation
+    output_path = output_dir
+    os.makedirs(output_path, exist_ok=True)
+    callbacks['log'](f"Saving files directly to: {output_path}")
 
     csv_filename = os.path.join(output_path, "cards_data.csv")
     
-    # SMART RETRY: Read existing tracking columns if retrying
+    # Read existing tracking columns if retrying
     existing_records = {}
     if is_retry and os.path.exists(csv_filename):
         callbacks['log']("Reading existing CSV tracker data to optimize downloads...")
@@ -147,7 +145,6 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                         f_success = True if not f_name else False
                         b_success = True if not b_name else False
                         
-                        # Fallback registry state
                         count_val = "1"
                         count_reg_val = "No"
                         
@@ -158,7 +155,7 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                         # Process Front Face
                         if f_name:
                             expected_images.append(f_name)
-                            f_path = os.path.join(images_path, f_name)
+                            f_path = os.path.join(output_path, f_name)
                             is_already_done = str_id in existing_records and existing_records[str_id][5] == "Yes"
                             
                             if is_already_done and os.path.exists(f_path) and os.path.getsize(f_path) > 0:
@@ -173,7 +170,7 @@ def run_scraping_task(target_url, is_retry, output_dir, pause_event, callbacks):
                         # Process Back Face
                         if b_name:
                             expected_images.append(b_name)
-                            b_path = os.path.join(images_path, b_name)
+                            b_path = os.path.join(output_path, b_name)
                             is_already_done = str_id in existing_records and existing_records[str_id][6] == "Yes"
                             
                             if is_already_done and os.path.exists(b_path) and os.path.getsize(b_path) > 0:
@@ -271,7 +268,6 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
         if not card_code:
             continue
             
-        # SMART SKIP: Skip if already fetched successfully in a past attempt
         if reg_idx < len(row) and row[reg_idx] == "Yes":
             log_callback(f"ArkhamDB ID: {card_code} already updated previously. Skipping.")
             continue
@@ -304,7 +300,6 @@ def update_csv_quantities(csv_path, log_callback, pause_event=None):
             row[reg_idx] = "Failed"
             failed_cards.append((card_code, f"Unknown ({type(e).__name__})"))
             
-        # Live-saving incremental process
         try:
             with open(csv_path, mode='w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)

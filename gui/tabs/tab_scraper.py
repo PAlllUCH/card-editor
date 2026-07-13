@@ -31,14 +31,14 @@ class ScraperTab:
         self.url_entry = ttk.Entry(input_frame, width=80)
         self.url_entry.pack(fill=tk.X, pady=5)
 
-        # NEW: Dynamic Output Directory Selector UI element
-        ttk.Label(input_frame, text="Output Parent Folder:").pack(anchor=tk.W, pady=2)
+        # Dynamic Output Directory Selector UI element (Updated label text)
+        ttk.Label(input_frame, text="Output Folder:").pack(anchor=tk.W, pady=2)
         dir_selection_frame = ttk.Frame(input_frame)
         dir_selection_frame.pack(fill=tk.X, pady=5)
         
         self.dir_entry = ttk.Entry(dir_selection_frame)
         self.dir_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.dir_entry.insert(0, OUTPUT_DIR) # Default baseline fallback path
+        self.dir_entry.insert(0, OUTPUT_DIR)
         
         self.browse_btn = ttk.Button(dir_selection_frame, text="Browse...", command=self.browse_output_directory)
         self.browse_btn.pack(side=tk.RIGHT)
@@ -81,7 +81,6 @@ class ScraperTab:
         self.tree.column('#0', width=180, stretch=tk.YES)
         self.tree.column('Status', width=80, stretch=tk.NO)
         self.tree.pack(expand=True, fill=tk.BOTH)
-        tree_scroll.config(command=tree_scroll.set)
         tree_scroll.config(command=self.tree.yview)
 
         self.tree.tag_configure('Pending', foreground='gray')
@@ -89,7 +88,6 @@ class ScraperTab:
         self.tree.tag_configure('OK', foreground='green')
         self.tree.tag_configure('Error', foreground='red')
 
-    # --- NEW: Folder Browser Handle ---
     def browse_output_directory(self):
         chosen_dir = filedialog.askdirectory(initialdir=self.dir_entry.get())
         if chosen_dir:
@@ -204,8 +202,7 @@ class ScraperTab:
             messagebox.showinfo("Info", "Nothing to verify. Start scraping first.")
             return
             
-        # Target the isolated images folder during the extraction validation check
-        missing_files = [img for img in self.app.expected_images if not os.path.exists(os.path.join(self.app.current_folder, "images", img))]
+        missing_files = [img for img in self.app.expected_images if not os.path.exists(os.path.join(self.app.current_folder, img))]
         
         if missing_files:
             self.log(f"\n[ VERIFICATION FAILED ] {len(missing_files)} files are missing.")

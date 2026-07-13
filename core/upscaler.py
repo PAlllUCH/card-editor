@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import time
+import subprocess
 
 def upload_to_kie(file_path, api_key):
     """Uploads a local file to Kie.ai temporary storage.
@@ -243,4 +244,71 @@ def upscale_image_pipeline(file_path, model, api_key, output_dir, upscale_factor
     if log_fn:
         log_fn(f"Upscaling completed! Saved to '{output_path}'")
         
+    return output_path
+
+def upscale_image_local_upscayl(file_path, model, upscayl_bin, output_dir, upscale_factor="4", log_fn=None):
+    """Pipeline to upscale a single image locally using the Upscayl CLI binary.
+    Forces output to lossless PNG format for print optimization.
+    Returns the path of the saved file.
+    """
+    if log_fn:
+        log_fn(f"Starting local Upscayl processing for '{os.path.basename(file_path)}'...")
+
+    # Strict standard Windows path normalization
+    upscayl_bin = os.path.normpath(upscayl_bin)
+    file_path = os.path.normpath(file_path)
+    output_dir = os.path.normpath(output_dir)
+
+    if not os.path.exists(upscayl_bin):
+        raise FileNotFoundError(f"Upscayl binary not found at specified path: {upscayl_bin}")
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # FIXED: Hardcode the output extension to .png for printing requirements
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_path = os.path.normpath(os.path.join(output_dir, f"{base_name}_upscaled.png"))
+
+    # Extract the directory where the binary lives
+    bin_dir = os.path.dirname(upscayl_bin)
+    
+    # Locate the default main installation models folder
+    models_dir = os.path.abspath(os.path.join(bin_dir, "..", "models")).replace("\\", "/")
+
+    # ADDED: "-f", "png" explicitly instructs Upscayl to write a lossless file
+    cmd = [
+        upscayl_bin,
+        "-i", file_path,
+        "-o", output_path,
+        "-m", models_dir,
+        "-n", model,
+        "-s", str(upscale_factor),
+        "-f", "png"
+    ]
+
+    if log_fn:
+        log_fn(f"Running command: {' '.join([f'\"{x}\"' if ' ' in x else x for x in cmd])}")
+
+    # Fire process without a hidden execution shell environment
+    process = subprocess.Popen(
+        cmd, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, 
+        text=True, 
+        shell=False,
+        cwd=bin_dir
+    )
+    
+    if process.stdout:
+        for line in process.stdout:
+            if log_fn and line.strip():
+                log_fn(f"[Upscayl] {line.strip()}")
+                
+    process.wait()
+
+    if process.returncode != 0:
+        raise RuntimeError(f"Upscayl process exited with error code {process.returncode}")
+
+    if log_fn:
+        log_fn(f"Local upscaling completed! Saved to '{output_path}'")
+
     return output_path
