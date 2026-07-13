@@ -10,6 +10,9 @@ class LayoutTab:
         self.app = app_controller
         
         self.build_ui()
+        # Register for theme changes
+        if hasattr(self.app, 'theme_manager'):
+            self.app.theme_manager.register(self._apply_theme)
 
     def build_ui(self):
         # Top Config Frame
@@ -104,8 +107,10 @@ class LayoutTab:
         self.indiv_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
 
         # Scrolled Text Box for logs
-        self.console = scrolledtext.ScrolledText(self.frame, wrap=tk.WORD, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        self.console = scrolledtext.ScrolledText(self.frame, wrap=tk.WORD, font=("Consolas", 10))
         self.console.pack(expand=True, fill=tk.BOTH, padx=10, pady=(5, 10))
+        # Apply theme colors to console
+        self._apply_console_theme()
 
     def on_preset_change(self, event=None):
         preset = self.preset_var.get()
@@ -146,6 +151,14 @@ class LayoutTab:
         self.console.insert(tk.END, message + "\n")
         self.console.see(tk.END)
         self.console.config(state=tk.DISABLED)
+
+    def _apply_console_theme(self):
+        tm = getattr(self.app, 'theme_manager', None)
+        if tm:
+            self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
+
+    def _apply_theme(self, tm):
+        self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
 
     def _get_params(self):
         csv_path = self.csv_path_var.get().strip()

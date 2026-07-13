@@ -5,6 +5,7 @@ from gui.tabs.tab_editor import EditorTab
 from gui.tabs.tab_layout import LayoutTab
 from gui.tabs.tab_pdf_editor import PdfEditorTab  # <-- NEW IMPORT
 from gui.tabs.tab_upscaling import UpscalingTab
+from gui.theme_manager import ThemeManager
 
 class MainAppWindow:
     def __init__(self, root):
@@ -16,7 +17,42 @@ class MainAppWindow:
         self.current_folder = ""
         self.expected_images = []
         
+        # Theme manager (must be created before any widgets that depend on it)
+        self.theme_manager = ThemeManager(root)
+        
+        self.create_menubar()
         self.create_notebook()
+
+    def create_menubar(self):
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
+        
+        view_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="View", menu=view_menu)
+        
+        self.theme_var = tk.StringVar(value=self.theme_manager.theme)
+        view_menu.add_radiobutton(
+            label="Light Mode",
+            variable=self.theme_var,
+            value="light",
+            command=lambda: self._set_theme("light")
+        )
+        view_menu.add_radiobutton(
+            label="Dark Mode",
+            variable=self.theme_var,
+            value="dark",
+            command=lambda: self._set_theme("dark")
+        )
+        view_menu.add_separator()
+        view_menu.add_command(label="Toggle Theme", command=self._toggle_theme)
+
+    def _set_theme(self, theme_name):
+        self.theme_var.set(theme_name)
+        self.theme_manager.theme = theme_name
+
+    def _toggle_theme(self):
+        new = self.theme_manager.toggle()
+        self.theme_var.set(new)
 
     def create_notebook(self):
         self.notebook = ttk.Notebook(self.root)

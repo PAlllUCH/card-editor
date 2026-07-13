@@ -19,8 +19,19 @@ class UpscalingTab:
         self.app = app_controller
         self.config_data = self.load_config()
         
+        # Track data structures for selection and sequence mechanics
+        self.file_checks = {}
+        self.file_labels = {}       # Maps filename -> tk.Label widget reference
+        self.filenames_list = []    # Keeps an ordered list of current files for step navigation
+        self.selected_label_item = None
+        self.selected_filename = None
+        
         self.build_ui()
+        self.bind_keyboard_navigation()
         self.load_saved_settings()
+        # Register for theme changes
+        if hasattr(self.app, 'theme_manager'):
+            self.app.theme_manager.register(self._apply_theme)
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -113,16 +124,37 @@ class UpscalingTab:
         ttk.Button(csv_row, text="...", command=self.browse_csv, width=3).pack(side=tk.RIGHT)
         
         ttk.Label(left_panel, text="Images in CSV Folder:").pack(anchor=tk.W)
-        self.file_listbox = tk.Listbox(left_panel, width=30, exportselection=False)
-        self.file_listbox.pack(expand=True, fill=tk.Y, pady=5)
-        self.file_listbox.bind('<<ListboxSelect>>', self.on_file_select)
+        
+        # Select All / Deselect All buttons
+        tool_frame = ttk.Frame(left_panel)
+        tool_frame.pack(fill=tk.X, pady=(5, 2))
+        ttk.Button(tool_frame, text="Select All", command=self.select_all_files, width=10).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(tool_frame, text="Deselect All", command=self.deselect_all_files, width=12).pack(side=tk.LEFT)
+        
+        # Scrollable checkbox list (replaces Listbox)
+        list_container = ttk.Frame(left_panel, relief=tk.SUNKEN, borderwidth=1)
+        list_container.pack(expand=True, fill=tk.BOTH, pady=5)
+        
+        self.canvas = tk.Canvas(list_container, bd=0, highlightthickness=0, bg=getattr(self.app, 'theme_manager', None) and self.app.theme_manager.c("tk_canvas_bg") or "#ffffff")
+        scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
         # Right Panel: Preview, Config, Action Controls
         right_panel = ttk.Frame(self.frame)
         right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
         # Image Preview Component
-        self.preview_lbl = ImagePreviewComponent(right_panel)
+        self.preview_lbl = ImagePreviewComponent(right_panel, theme_manager=getattr(self.app, 'theme_manager', None))
         self.preview_lbl.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
 
         # Engine Settings Notebook
@@ -255,19 +287,84 @@ class UpscalingTab:
         ttk.Entry(row3, textvariable=self.out_dir_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         ttk.Button(row3, text="Browse...", command=self.browse_output_dir).pack(side=tk.RIGHT)
 
-        # Action Buttons
+        # Navigation & Action Buttons
         actions_frame = ttk.Frame(right_panel)
         actions_frame.pack(fill=tk.X, pady=5)
         
-        self.upscale_single_btn = ttk.Button(actions_frame, text="Upscale Selected (Test)", command=self.start_single_upscale)
-        self.upscale_single_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+        # Navigation controls
+        nav_frame = ttk.LabelFrame(actions_frame, text="Navigation & Selection", padding="5")
+        nav_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        
+        ttk.Button(nav_frame, text="◀ Prev", command=lambda: self.navigate_queue(-1), width=8).pack(side=tk.LEFT, padx=2)
+        self.toggle_check_btn = ttk.Button(nav_frame, text="Select/Deselect", command=self.toggle_current_file_check, width=15)
+        self.toggle_check_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(nav_frame, text="Next ▶", command=lambda: self.navigate_queue(1), width=8).pack(side=tk.LEFT, padx=2)
+        
+        # Upscale action buttons
+        action_frame = ttk.Frame(actions_frame)
+        action_frame.pack(side=tk.RIGHT)
+        
+        self.upscale_single_btn = ttk.Button(action_frame, text="Upscale Selected (Test)", command=self.start_single_upscale)
+        self.upscale_single_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.upscale_bulk_btn = ttk.Button(actions_frame, text="Upscale Bulk (Deploy)", command=self.start_bulk_upscale)
-        self.upscale_bulk_btn.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
+        self.upscale_bulk_btn = ttk.Button(action_frame, text="Upscale Bulk (Deploy)", command=self.start_bulk_upscale)
+        self.upscale_bulk_btn.pack(side=tk.LEFT)
 
         # Console logs
-        self.console = scrolledtext.ScrolledText(right_panel, wrap=tk.WORD, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 9), height=10)
+        self.console = scrolledtext.ScrolledText(right_panel, wrap=tk.WORD, font=("Consolas", 9), height=10)
         self.console.pack(expand=True, fill=tk.BOTH, pady=(5, 0))
+        self._apply_console_theme()
+
+    def bind_keyboard_navigation(self):
+        self.app.root.bind("<Up>", lambda event: self.handle_arrow_navigation(-1))
+        self.app.root.bind("<Down>", lambda event: self.handle_arrow_navigation(1))
+
+    def handle_arrow_navigation(self, direction):
+        focused_widget = self.app.root.focus_get()
+        if isinstance(focused_widget, (tk.Entry, ttk.Entry, ttk.Combobox)):
+            return 
+        self.navigate_queue(direction)
+
+    def navigate_queue(self, direction):
+        if not self.filenames_list: return
+        if self.selected_filename in self.filenames_list:
+            curr_idx = self.filenames_list.index(self.selected_filename)
+            new_idx = curr_idx + direction
+            new_idx = max(0, min(new_idx, len(self.filenames_list) - 1))
+        else:
+            new_idx = 0
+            
+        target_file = self.filenames_list[new_idx]
+        target_label = self.file_labels.get(target_file)
+        
+        if target_label:
+            self.on_custom_file_click(target_file, target_label)
+            self.scroll_to_visible(target_label)
+
+    def scroll_to_visible(self, label_widget):
+        self.canvas.update_idletasks()
+        row_frame = label_widget.master 
+        y_pos = row_frame.winfo_y()
+        frame_height = self.scrollable_frame.winfo_height()
+        canvas_height = self.canvas.winfo_height()
+        
+        if frame_height > canvas_height:
+            fraction = y_pos / float(frame_height)
+            self.canvas.yview_moveto(max(0, fraction - (canvas_height / (2.0 * frame_height))))
+
+    def toggle_current_file_check(self):
+        if not self.selected_filename: return
+        var = self.file_checks.get(self.selected_filename)
+        if var:
+            var.set(not var.get())
+
+    def select_all_files(self):
+        for var in self.file_checks.values():
+            var.set(True)
+
+    def deselect_all_files(self):
+        for var in self.file_checks.values():
+            var.set(False)
 
     def browse_upscayl_bin(self):
         filename = filedialog.askopenfilename(
@@ -307,30 +404,59 @@ class UpscalingTab:
             self.save_config()
 
     def load_files_from_csv(self, csv_path):
-        self.file_listbox.delete(0, tk.END)
+        # Clear existing UI items and tracking structures
+        for child in self.scrollable_frame.winfo_children():
+            child.destroy()
+        self.file_checks.clear()
+        self.file_labels.clear()
+        self.filenames_list = []
+        self.selected_label_item = None
+        self.selected_filename = None
+        
         folder = os.path.dirname(csv_path)
         valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.bmp')
         if os.path.exists(folder):
-            for file in os.listdir(folder):
+            # Use sorted order for consistent navigation
+            sorted_files = sorted(os.listdir(folder))
+            for file in sorted_files:
                 if file.lower().endswith(valid_exts):
-                    self.file_listbox.insert(tk.END, file)
+                    self.filenames_list.append(file)
+                    row = ttk.Frame(self.scrollable_frame)
+                    row.pack(fill=tk.X, anchor=tk.W, pady=1, padx=2)
+                    
+                    var = tk.BooleanVar(value=True)
+                    self.file_checks[file] = var
+                    
+                    cb = ttk.Checkbutton(row, variable=var)
+                    cb.pack(side=tk.LEFT)
+                    
+                    lbl = tk.Label(row, text=file, anchor=tk.W, padx=3)
+                    tm = getattr(self.app, 'theme_manager', None)
+                    row_bg = tm.c("file_row_bg") if tm else self.frame.winfo_toplevel().cget("bg")
+                    row_fg = tm.c("file_row_fg") if tm else "black"
+                    lbl.configure(bg=row_bg, fg=row_fg)
+                    lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    
+                    self.file_labels[file] = lbl
+                    lbl.bind("<Button-1>", lambda event, f=file, l=lbl: self.on_custom_file_click(f, l))
 
-    def browse_output_dir(self):
-        dirname = filedialog.askdirectory(title="Select Output Folder")
-        if dirname:
-            self.out_dir_var.set(dirname)
-            self.save_config()
-
-    def on_file_select(self, event):
-        selection = self.file_listbox.curselection()
-        if not selection: return
+    def on_custom_file_click(self, filename, label_widget):
+        tm = getattr(self.app, 'theme_manager', None)
+        if self.selected_label_item:
+            normal_bg = tm.c("file_row_bg") if tm else self.frame.winfo_toplevel().cget("bg")
+            normal_fg = tm.c("file_row_fg") if tm else "black"
+            self.selected_label_item.config(bg=normal_bg, fg=normal_fg)
+            
+        self.selected_label_item = label_widget
+        self.selected_filename = filename
+        hl_bg = tm.c("highlight_bg") if tm else "#0078d7"
+        hl_fg = tm.c("highlight_fg") if tm else "white"
+        label_widget.config(bg=hl_bg, fg=hl_fg) 
         
-        filename = self.file_listbox.get(selection[0])
         csv_path = self.csv_path_var.get().strip()
         if not csv_path: return
         
         filepath = os.path.join(os.path.dirname(csv_path), filename)
-        
         try:
             file_bytes = np.fromfile(filepath, dtype=np.uint8)
             img = cv2.imdecode(file_bytes, cv2.IMREAD_UNCHANGED)
@@ -342,6 +468,12 @@ class UpscalingTab:
         except Exception as e:
             self.log(f"[ERROR] Failed to load preview: {e}")
 
+    def browse_output_dir(self):
+        dirname = filedialog.askdirectory(title="Select Output Folder")
+        if dirname:
+            self.out_dir_var.set(dirname)
+            self.save_config()
+
     def log(self, message):
         self.app.root.after(0, self._append_log, message)
 
@@ -350,6 +482,27 @@ class UpscalingTab:
         self.console.insert(tk.END, message + "\n")
         self.console.see(tk.END)
         self.console.config(state=tk.DISABLED)
+
+    def _apply_console_theme(self):
+        tm = getattr(self.app, 'theme_manager', None)
+        if tm:
+            self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
+
+    def _apply_theme(self, tm):
+        self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
+        # File list canvas
+        if hasattr(self, 'canvas'):
+            self.canvas.configure(bg=tm.c("tk_canvas_bg"))
+        # File labels
+        normal_bg = tm.c("file_row_bg")
+        normal_fg = tm.c("file_row_fg")
+        hl_bg = tm.c("highlight_bg")
+        hl_fg = tm.c("highlight_fg")
+        for filename, lbl in self.file_labels.items():
+            if lbl is self.selected_label_item:
+                lbl.configure(bg=hl_bg, fg=hl_fg)
+            else:
+                lbl.configure(bg=normal_bg, fg=normal_fg)
 
     def refresh_balance(self):
         api_key = self.api_key_var.get().strip()
@@ -421,12 +574,11 @@ class UpscalingTab:
         if not self.validate_inputs():
             return
             
-        selection = self.file_listbox.curselection()
-        if not selection:
-            messagebox.showerror("Error", "Please select an image from the list first.")
+        if not self.selected_filename:
+            messagebox.showerror("Error", "Please select an image from the list by clicking on it.")
             return
             
-        filename = self.file_listbox.get(selection[0])
+        filename = self.selected_filename
         csv_path = self.csv_path_var.get().strip()
         filepath = os.path.join(os.path.dirname(csv_path), filename)
         
@@ -479,13 +631,14 @@ class UpscalingTab:
         if not self.validate_inputs():
             return
             
-        files = self.file_listbox.get(0, tk.END)
-        if not files:
-            messagebox.showerror("Error", "No images found in the selected CSV directory.")
+        # Get only checked files
+        selected_targets = [filename for filename, var in self.file_checks.items() if var.get()]
+        if not selected_targets:
+            messagebox.showwarning("No Selection", "No files are checked for bulk upscaling.\nUse the checkboxes to select files.")
             return
             
         selected_engine = self.engine_notebook.tab(self.engine_notebook.select(), "text")
-        if not messagebox.askyesno("Confirm Bulk Upscale", f"Are you sure you want to upscale all {len(files)} images in bulk using {selected_engine}?"):
+        if not messagebox.askyesno("Confirm Bulk Upscale", f"Are you sure you want to upscale {len(selected_targets)} checked images using {selected_engine}?"):
             return
             
         self.save_config()
@@ -517,9 +670,9 @@ class UpscalingTab:
             # Dictionary to map original filename -> upscaled filename
             upscaled_mapping = {} 
 
-            for idx, filename in enumerate(files, 1):
+            for idx, filename in enumerate(selected_targets, 1):
                 filepath = os.path.join(base_folder, filename)
-                self.log(f"\n--- [{idx}/{len(files)}] Processing {filename} ---")
+                self.log(f"\n--- [{idx}/{len(selected_targets)}] Processing {filename} ---")
                 try:
                     if selected_engine == "KIE.ai":
                         out_path = upscale_image_pipeline(
@@ -600,7 +753,7 @@ class UpscalingTab:
             
             self.app.root.after(0, lambda: messagebox.showinfo(
                 "Bulk Upscale Finished", 
-                f"Completed {len(files)} files.\nSuccess: {success_count}\nFailed: {fail_count}\n\nCSV file updated in output directory!"
+                f"Completed {len(selected_targets)} files.\nSuccess: {success_count}\nFailed: {fail_count}\n\nCSV file updated in output directory!"
             ))
             self.app.root.after(0, lambda: self.set_buttons_state(tk.NORMAL))
             if selected_engine == "KIE.ai":

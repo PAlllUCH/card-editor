@@ -5,10 +5,15 @@ class ImagePreviewComponent(tk.Canvas):
     """A reusable UI component that handles scaling, displaying, zooming,
     and panning PIL Images safely using a tkinter Canvas.
     """
-    def __init__(self, parent, **kwargs):
+    def __init__(self, parent, theme_manager=None, **kwargs):
         # Pop standard label options that canvas doesn't support directly
-        bg = kwargs.pop('bg', "#2d2d2d")
-        fg = kwargs.pop('fg', "white")
+        self._theme_manager = theme_manager
+        if theme_manager:
+            bg = kwargs.pop('bg', theme_manager.c("preview_bg"))
+            fg = kwargs.pop('fg', theme_manager.c("preview_fg"))
+        else:
+            bg = kwargs.pop('bg', "#2d2d2d")
+            fg = kwargs.pop('fg', "white")
         text = kwargs.pop('text', "Select an image to preview")
         highlightthickness = kwargs.pop('highlightthickness', 0)
         
@@ -23,6 +28,10 @@ class ImagePreviewComponent(tk.Canvas):
         self.pan_x = 0
         self.pan_y = 0
         
+        # Register for theme updates if theme_manager provided
+        if theme_manager:
+            theme_manager.register(self._on_theme_change)
+        
         # Interactive bindings
         self.bind("<ButtonPress-1>", self.on_pan_start)
         self.bind("<B1-Motion>", self.on_pan_drag)
@@ -32,6 +41,17 @@ class ImagePreviewComponent(tk.Canvas):
         self.bind("<Double-Button-1>", self.reset_zoom_pan)
         self.bind("<Configure>", self.on_resize)
         
+        self.draw_elements()
+
+    def set_theme_manager(self, theme_manager):
+        self._theme_manager = theme_manager
+        if theme_manager:
+            theme_manager.register(self._on_theme_change)
+            self._on_theme_change(theme_manager)
+
+    def _on_theme_change(self, tm):
+        self.configure(bg=tm.c("preview_bg"))
+        self.fg_color = tm.c("preview_fg")
         self.draw_elements()
 
     def config(self, cnf=None, **kw):

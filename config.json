@@ -9,5 +9,6 @@
     "custom_prompt": "upscale and clean the image. make sure that all texts remain the same",
     "upscayl_bin_path": "C:/Program Files/Upscayl/resources/bin/upscayl-bin.exe",
     "local_model": "digital-art-4x",
-    "local_factor": "4"
+    "local_factor": "4",
+    "theme": "light"
 }

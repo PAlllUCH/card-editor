@@ -25,6 +25,9 @@ class EditorTab:
         
         self.build_ui()
         self.bind_keyboard_navigation()
+        # Register for theme changes
+        if hasattr(self.app, 'theme_manager'):
+            self.app.theme_manager.register(self._apply_theme)
 
     def build_ui(self):
         # ----------------------------------------------------
@@ -53,7 +56,7 @@ class EditorTab:
         list_container = ttk.Frame(left_panel, relief=tk.SUNKEN, borderwidth=1)
         list_container.pack(expand=True, fill=tk.BOTH, pady=5)
         
-        self.canvas = tk.Canvas(list_container, bd=0, highlightthickness=0)
+        self.canvas = tk.Canvas(list_container, bd=0, highlightthickness=0, bg=getattr(self.app, 'theme_manager', None) and self.app.theme_manager.c("tk_canvas_bg") or "#ffffff")
         scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self.canvas.yview)
         self.scrollable_frame = ttk.Frame(self.canvas)
         
@@ -73,7 +76,7 @@ class EditorTab:
         right_panel = ttk.Frame(self.frame)
         right_panel.pack(side=tk.RIGHT, expand=True, fill=tk.BOTH, padx=10, pady=10)
 
-        self.preview_lbl = ImagePreviewComponent(right_panel)
+        self.preview_lbl = ImagePreviewComponent(right_panel, theme_manager=getattr(self.app, 'theme_manager', None))
         self.preview_lbl.pack(expand=True, fill=tk.BOTH, pady=(0, 10))
 
         controls = ttk.LabelFrame(right_panel, text="OpenCV Processing Pipeline", padding="5")
@@ -229,8 +232,8 @@ class EditorTab:
         ttk.Label(row3, text="R:").pack(side=tk.LEFT)
         ttk.Entry(row3, textvariable=self.spad_r, width=4).pack(side=tk.LEFT, padx=2)
 
-        calc_lbl = tk.Label(size_group, textvariable=self.size_info_var, justify=tk.LEFT, bg="#333", fg="#0f0", font=("Consolas", 8))
-        calc_lbl.pack(fill=tk.X, pady=(10, 0))
+        self.calc_lbl = tk.Label(size_group, textvariable=self.size_info_var, justify=tk.LEFT, font=("Consolas", 8))
+        self.calc_lbl.pack(fill=tk.X, pady=(10, 0))
 
         # ----------------------------------------------------
         # BOTTOM CONTROLS ACTIONS PANEL
@@ -354,19 +357,27 @@ class EditorTab:
                 cb = ttk.Checkbutton(row, variable=var)
                 cb.pack(side=tk.LEFT)
                 
-                lbl = tk.Label(row, text=file, anchor=tk.W, bg=self.frame.winfo_toplevel().cget("bg"), fg="black", padx=3)
+                tm = getattr(self.app, 'theme_manager', None)
+                row_bg = tm.c("file_row_bg") if tm else self.frame.winfo_toplevel().cget("bg")
+                row_fg = tm.c("file_row_fg") if tm else "black"
+                lbl = tk.Label(row, text=file, anchor=tk.W, bg=row_bg, fg=row_fg, padx=3)
                 lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
                 
                 self.file_labels[file] = lbl
                 lbl.bind("<Button-1>", lambda event, f=file, l=lbl: self.on_custom_file_click(f, l))
 
     def on_custom_file_click(self, filename, label_widget):
+        tm = getattr(self.app, 'theme_manager', None)
         if self.selected_label_item:
-            self.selected_label_item.config(bg=self.frame.winfo_toplevel().cget("bg"), fg="black")
+            normal_bg = tm.c("file_row_bg") if tm else self.frame.winfo_toplevel().cget("bg")
+            normal_fg = tm.c("file_row_fg") if tm else "black"
+            self.selected_label_item.config(bg=normal_bg, fg=normal_fg)
             
         self.selected_label_item = label_widget
         self.selected_filename = filename
-        label_widget.config(bg="#0078d7", fg="white") 
+        hl_bg = tm.c("highlight_bg") if tm else "#0078d7"
+        hl_fg = tm.c("highlight_fg") if tm else "white"
+        label_widget.config(bg=hl_bg, fg=hl_fg) 
         
         filepath = os.path.join(self.app.current_folder, filename)
         try:
@@ -391,6 +402,36 @@ class EditorTab:
     def deselect_all_files(self):
         for var in self.file_checks.values():
             var.set(False)
+
+    def _apply_theme(self, tm):
+        """Update tk widget colors when theme changes."""
+        colors = tm.colors()
+        # Canvas (file list container)
+        if hasattr(self, 'canvas'):
+            self.canvas.configure(bg=colors["tk_canvas_bg"])
+        # Size calc label
+        if hasattr(self, 'calc_lbl'):
+            self.calc_lbl.configure(bg=colors["size_calc_bg"], fg=colors["size_calc_fg"])
+        # tk.Scale widgets
+        for attr in ('fill_size', 'inpaint_rad', 'corner_fade', 'margin_fade',
+                     'blend_str', 'noise_amount', 'col_sat', 'col_con',
+                     'col_bri', 'col_sepia'):
+            widget = getattr(self, attr, None)
+            if widget:
+                widget.configure(bg=colors["tk_scale_bg"],
+                                 fg=colors["tk_scale_fg"],
+                                 troughcolor=colors["tk_scale_trough"],
+                                 highlightbackground=colors["tk_scale_highlight"])
+        # File labels (dynamically created)
+        normal_bg = colors["file_row_bg"]
+        normal_fg = colors["file_row_fg"]
+        hl_bg = colors["highlight_bg"]
+        hl_fg = colors["highlight_fg"]
+        for filename, lbl in self.file_labels.items():
+            if lbl is self.selected_label_item:
+                lbl.configure(bg=hl_bg, fg=hl_fg)
+            else:
+                lbl.configure(bg=normal_bg, fg=normal_fg)
 
     def preview_current_edit(self):
         if not self.selected_filename:

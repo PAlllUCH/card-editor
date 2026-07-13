@@ -16,6 +16,9 @@ class ScraperTab:
         self.tree_items = {} 
         
         self.build_ui()
+        # Register for theme changes
+        if hasattr(self.app, 'theme_manager'):
+            self.app.theme_manager.register(self._apply_theme)
 
     def build_ui(self):
         left_frame = ttk.Frame(self.frame)
@@ -69,8 +72,9 @@ class ScraperTab:
         self.verify_btn = ttk.Button(btn_frame, text="Verify & Go to Editor", command=self.verify_and_proceed, state=tk.DISABLED)
         self.verify_btn.pack(side=tk.RIGHT, padx=5)
 
-        self.console = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, state=tk.DISABLED, bg="#1e1e1e", fg="#d4d4d4", font=("Consolas", 10))
+        self.console = scrolledtext.ScrolledText(left_frame, wrap=tk.WORD, state=tk.DISABLED, font=("Consolas", 10))
         self.console.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0, 10))
+        self._apply_console_theme()
 
         ttk.Label(right_frame, text="File Processing Status:").pack(anchor=tk.W, pady=(10, 5))
         
@@ -89,6 +93,7 @@ class ScraperTab:
         self.tree.tag_configure('Processing...', foreground='orange')
         self.tree.tag_configure('OK', foreground='green')
         self.tree.tag_configure('Error', foreground='red')
+        self._update_treeview_tags()
 
     def browse_output_directory(self):
         chosen_dir = filedialog.askdirectory(initialdir=self.dir_entry.get())
@@ -188,6 +193,27 @@ class ScraperTab:
         self.console.insert(tk.END, message + "\n")
         self.console.see(tk.END)
         self.console.config(state=tk.DISABLED)
+
+    def _apply_console_theme(self):
+        tm = getattr(self.app, 'theme_manager', None)
+        if tm:
+            self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
+
+    def _update_treeview_tags(self):
+        tm = getattr(self.app, 'theme_manager', None)
+        if tm:
+            c = tm.colors()
+            self.tree.tag_configure('Pending', foreground=c["tag_pending"])
+            self.tree.tag_configure('Processing...', foreground=c["tag_processing"])
+            self.tree.tag_configure('OK', foreground=c["tag_ok"])
+            self.tree.tag_configure('Error', foreground=c["tag_error"])
+
+    def _apply_theme(self, tm):
+        self.console.configure(bg=tm.c("console_bg"), fg=tm.c("console_fg"))
+        self.tree.tag_configure('Pending', foreground=tm.c("tag_pending"))
+        self.tree.tag_configure('Processing...', foreground=tm.c("tag_processing"))
+        self.tree.tag_configure('OK', foreground=tm.c("tag_ok"))
+        self.tree.tag_configure('Error', foreground=tm.c("tag_error"))
 
     def init_file_list(self, files, is_retry):
         if not is_retry:
