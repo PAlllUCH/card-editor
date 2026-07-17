@@ -1,0 +1,1 @@
+OUTPUT_DIR = "downloaded_cards"
